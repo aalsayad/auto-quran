@@ -37,19 +37,37 @@ async function fetchAllSurahs() {
 }
 
 async function fetchAllVerses() {
-  console.log("\n📜 Fetching all verses (1-114 surahs)...");
+  console.log(
+    "\n📜 Fetching all verses with English translation (1-114 surahs)..."
+  );
   const allVerses: any = {};
 
   for (let surahNum = 1; surahNum <= 114; surahNum++) {
     console.log(`  Fetching Surah ${surahNum}...`);
-    const data = await fetchData(
+
+    // Fetch Arabic text
+    const arabicData = await fetchData(
       `${API_BASE}/quran/verses/uthmani?chapter_number=${surahNum}`
     );
-    allVerses[surahNum] = data.verses;
-    await delay(200); // Rate limiting
+
+    // Fetch translation (ID 20 = Saheeh International)
+    const translationData = await fetchData(
+      `${API_BASE}/quran/translations/20?chapter_number=${surahNum}`
+    );
+
+    // Merge translations into verses
+    const verses = arabicData.verses.map((verse: any, index: number) => ({
+      ...verse,
+      translations: translationData.translations[index]
+        ? [translationData.translations[index]]
+        : [],
+    }));
+
+    allVerses[surahNum] = verses;
+    await delay(300); // Rate limiting (2 requests per surah)
   }
 
-  console.log(`✅ Got all verses for 114 surahs`);
+  console.log(`✅ Got all verses with translations for 114 surahs`);
   return allVerses;
 }
 

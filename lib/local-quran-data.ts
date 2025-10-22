@@ -34,6 +34,13 @@ export interface Verse {
   rub_el_hizb_number?: number;
   page_number?: number;
   words?: Word[];
+  // Translation
+  translations?: Array<{
+    id: number;
+    text: string;
+    resource_name: string;
+    language_name: string;
+  }>;
 }
 
 // Word data (for Mushaf pages)
@@ -114,8 +121,16 @@ export async function getMushafPagesForSurah(
   const response = await fetch("/quran-data/mushaf-pages.json");
   const allPages: Record<string, Verse[]> = await response.json();
 
+  // Generate full range of pages (the pages array only has first and last)
+  const firstPage = Math.min(...surah.pages);
+  const lastPage = Math.max(...surah.pages);
+  const allPageNumbers: number[] = [];
+  for (let page = firstPage; page <= lastPage; page++) {
+    allPageNumbers.push(page);
+  }
+
   const allVerses: Verse[] = [];
-  for (const pageNum of surah.pages) {
+  for (const pageNum of allPageNumbers) {
     const pageVerses = allPages[pageNum.toString()] || [];
     allVerses.push(...pageVerses);
   }

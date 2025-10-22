@@ -32,6 +32,7 @@ interface Ayah {
   number: number;
   text: string;
   numberInSurah: number;
+  translation?: string;
 }
 
 export default function QuranReaderPage() {
@@ -42,6 +43,7 @@ export default function QuranReaderPage() {
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
   const [mushafVerses, setMushafVerses] = useState<Verse[]>([]);
   const [viewMode, setViewMode] = useState<"list" | "mushaf">("list");
+  const [showTranslation, setShowTranslation] = useState(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -71,6 +73,15 @@ export default function QuranReaderPage() {
   // Get decorative Quranic verse marker
   const getVerseMarker = (num: number): string => {
     return `۝${toArabicNumerals(num)}`;
+  };
+
+  // Clean HTML tags from translation text (e.g., footnotes)
+  // TODO: Implement footnote display - fetch from API endpoint: /foot_notes/{id}
+  // Example: https://api.quran.com/api/v4/foot_notes/195932
+  // Could display as tooltips or expandable sections below each ayah
+  const cleanTranslation = (text: string): string => {
+    // Remove footnote markers like <sup foot_note=195932>1</sup>
+    return text.replace(/<sup[^>]*>.*?<\/sup>/g, "");
   };
 
   // Load audio from S3
@@ -129,10 +140,17 @@ export default function QuranReaderPage() {
             }
           }
 
+          // Extract translation (Clear Quran - ID 131)
+          const translation =
+            v.translations && v.translations.length > 0
+              ? v.translations[0].text
+              : undefined;
+
           return {
             number: v.id,
             text,
             numberInSurah: verseNumber,
+            translation,
           };
         });
         setAyahs(formattedAyahs);
@@ -384,6 +402,17 @@ export default function QuranReaderPage() {
                 <FiBook /> Mushaf
               </Button>
 
+              {/* Translation Toggle (only in list view) */}
+              {viewMode === "list" && (
+                <Button
+                  variant={showTranslation ? "default" : "outline"}
+                  className="cursor-pointer gap-2"
+                  onClick={() => setShowTranslation(!showTranslation)}
+                >
+                  {showTranslation ? "Hide" : "Show"} Translation
+                </Button>
+              )}
+
               <div className="w-px bg-border mx-2" />
 
               <Link href={`/editor/${project.id}`}>
@@ -461,7 +490,7 @@ export default function QuranReaderPage() {
                           {toArabicNumerals(ayah.numberInSurah)}
                         </span>
                       </div>
-                      <div className="flex-1">
+                      <div className="flex-1 space-y-3">
                         <p
                           className={`
                           text-right text-2xl leading-loose ${amiri.className}
@@ -472,6 +501,16 @@ export default function QuranReaderPage() {
                         >
                           {ayah.text} {getVerseMarker(ayah.numberInSurah)}
                         </p>
+                        {showTranslation && ayah.translation && (
+                          <p
+                            className={`
+                            text-left text-base leading-relaxed text-muted-foreground
+                            ${isActive ? "text-primary/80" : ""}
+                          `}
+                          >
+                            {cleanTranslation(ayah.translation)}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -532,86 +571,113 @@ export default function QuranReaderPage() {
                             <div
                               key={`line-${lineNum}`}
                               className={`
-                                text-right leading-loose px-4 py-2
+                                text-center px-4 py-2
                                 ${amiri.className}
                               `}
-                              style={{
-                                textAlign: 'justify',
-                                textAlignLast: 'right',
-                              }}
                               dir="rtl"
                               lang="ar"
+                              style={{
+                                width: "100%",
+                                maxWidth: "800px",
+                                margin: "0 auto",
+                              }}
                             >
-                              {lineVerses.map((verse) => {
-                                // Skip if verse doesn't have required data
-                                if (!verse.verse_key || !verse.id) {
-                                  return null;
-                                }
+                              <div className="text-3xl leading-relaxed">
+                                {(() => {
+                                  // Collect all words for this line grouped by verse
+                                  const verseWordGroups: Record<
+                                    number,
+                                    Array<{
+                                      word: {
+                                        id: number;
+                                        text_uthmani: string;
+                                        line_number: number;
+                                        char_type_name: string;
+                                      };
+                                      isLastWordOfVerse: boolean;
+                                    }>
+                                  > = {};
 
-                                // Use verse_number from API if available, fallback to parsing verse_key
-                                const verseNumber =
-                                  verse.verse_number ||
-                                  parseInt(verse.verse_key.split(":")[1]);
+                                  lineVerses.forEach((verse) => {
+                                    if (
+                                      !verse.verse_key ||
+                                      !verse.id ||
+                                      !verse.words
+                                    )
+                                      return;
 
-                                const isActive =
-                                  currentAyahNumbers.includes(verseNumber);
+                                    const verseNumber =
+                                      verse.verse_number ||
+                                      parseInt(verse.verse_key.split(":")[1]);
 
-                                // Get words for this line, filter out "end" markers
-                                const lineWords =
-                                  verse.words?.filter(
-                                    (w) =>
-                                      w.line_number === parseInt(lineNum) &&
-                                      w.char_type_name === "word"
-                                  ) || [];
+                                    const lineWords = verse.words.filter(
+                                      (w) =>
+                                        w.line_number === parseInt(lineNum) &&
+                                        w.char_type_name === "word"
+                                    );
 
-                                return (
-                                  <span
-                                    key={verse.id}
-                                    onClick={() => handleAyahClick(verseNumber)}
-                                    className={`
-                                      cursor-pointer transition-colors inline
-                                      ${
-                                        isActive
-                                          ? "bg-primary/10 text-primary font-semibold"
-                                          : "hover:bg-muted/50"
-                                      }
-                                    `}
-                                  >
-                                    {lineWords.map((word, idx) => (
-                                      <span key={word.id} className="text-3xl">
-                                        {word.text_uthmani}
-                                        {idx < lineWords.length - 1 ? " " : ""}
-                                      </span>
-                                    ))}{" "}
-                                    {/* Check if this is the last word of the verse */}
-                                    {(() => {
-                                      if (
-                                        !verse.words ||
-                                        lineWords.length === 0
-                                      )
-                                        return null;
-                                      const lastLineWordId =
-                                        lineWords[lineWords.length - 1]?.id;
-                                      // Get the last actual word (not "end" marker) from verse
-                                      const allVerseWords = verse.words.filter(
-                                        (w) => w.char_type_name === "word"
-                                      );
-                                      const lastVerseWordId =
-                                        allVerseWords[allVerseWords.length - 1]
-                                          ?.id;
+                                    const allVerseWords = verse.words.filter(
+                                      (w) => w.char_type_name === "word"
+                                    );
+                                    const lastVerseWordId =
+                                      allVerseWords[allVerseWords.length - 1]
+                                        ?.id;
 
-                                      if (lastLineWordId === lastVerseWordId) {
-                                        return (
-                                          <span className="text-2xl mx-1">
-                                            {getVerseMarker(verseNumber)}
-                                          </span>
+                                    if (!verseWordGroups[verseNumber]) {
+                                      verseWordGroups[verseNumber] = [];
+                                    }
+
+                                    lineWords.forEach((word) => {
+                                      verseWordGroups[verseNumber].push({
+                                        word,
+                                        isLastWordOfVerse:
+                                          word.id === lastVerseWordId,
+                                      });
+                                    });
+                                  });
+
+                                  // Render each verse's words together
+                                  return Object.entries(verseWordGroups).map(
+                                    ([verseNum, words]) => {
+                                      const verseNumber = parseInt(verseNum);
+                                      const isActive =
+                                        currentAyahNumbers.includes(
+                                          verseNumber
                                         );
-                                      }
-                                      return null;
-                                    })()}
-                                  </span>
-                                );
-                              })}
+
+                                      return (
+                                        <span
+                                          key={`verse-${verseNum}`}
+                                          onClick={() =>
+                                            handleAyahClick(verseNumber)
+                                          }
+                                          className={`
+                                            cursor-pointer transition-all duration-200 px-1 rounded
+                                            ${
+                                              isActive
+                                                ? "bg-primary/10 text-primary font-semibold"
+                                                : "hover:bg-muted/30"
+                                            }
+                                          `}
+                                        >
+                                          {words.map((item, idx) => (
+                                            <span
+                                              key={`${item.word.id}-${idx}`}
+                                            >
+                                              {item.word.text_uthmani}{" "}
+                                              {item.isLastWordOfVerse && (
+                                                <span className="text-2xl mx-1">
+                                                  {getVerseMarker(verseNumber)}
+                                                </span>
+                                              )}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      );
+                                    }
+                                  );
+                                })()}
+                              </div>
                             </div>
                           ));
                       })()}
