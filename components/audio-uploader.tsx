@@ -60,6 +60,8 @@ interface Segment {
   ayahNumbers?: number[]; // For merged segments containing multiple ayahs
 }
 
+// Constants for audio chunking (removed - now calculated dynamically based on file size)
+
 export default function AudioUploader() {
   const params = useParams();
   const projectId = params.projectId as string;
@@ -70,6 +72,12 @@ export default function AudioUploader() {
   const [selectedSurah, setSelectedSurah] = useState<number | null>(null);
   const [detectedSurah, setDetectedSurah] = useState<number | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcriptionProgress, setTranscriptionProgress] = useState({
+    current: 0,
+    total: 0,
+    percentage: 0,
+    message: "",
+  });
   const [segments, setSegments] = useState<Segment[]>([]);
   const [originalSegments, setOriginalSegments] = useState<Segment[]>([]); // Store original segments without padding
   const [isDownloading, setIsDownloading] = useState(false);
@@ -103,9 +111,8 @@ export default function AudioUploader() {
     if (file && file.type === "audio/mpeg") {
       setAudioFile(file);
 
-      // Only upload to S3 if we don't already have an uploaded URL
-      // (This prevents re-uploading when user is just changing the local file for a loaded project)
       if (!audioUrl) {
+        // New file, no existing upload
         console.log("🆕 [Upload] New file, uploading to S3...");
         const uploadedUrl = await uploadAudioToS3(file);
         if (uploadedUrl) {
@@ -113,10 +120,43 @@ export default function AudioUploader() {
           console.log("✅ [Upload] Audio uploaded to S3:", uploadedUrl);
         }
       } else {
-        console.log(
-          "ℹ️  [Upload] Audio already uploaded to S3, skipping upload"
-        );
-        console.log("📍 [Upload] Existing S3 URL:", audioUrl);
+        // Changing existing file: Upload new file first, then delete old one
+        console.log("🔄 [Upload] Replacing existing file...");
+        const oldAudioUrl = audioUrl;
+
+        console.log("📤 [Upload] Step 1: Uploading new file to S3...");
+        const newUploadedUrl = await uploadAudioToS3(file);
+
+        if (newUploadedUrl) {
+          console.log("✅ [Upload] Step 2: New file uploaded successfully");
+          setAudioUrl(newUploadedUrl);
+
+          // Now delete the old file
+          console.log("🗑️  [Upload] Step 3: Deleting old file from S3...");
+          try {
+            const response = await fetch("/api/delete-audio", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ audioUrl: oldAudioUrl }),
+            });
+
+            if (response.ok) {
+              console.log("✅ [Upload] Old file deleted successfully");
+            } else {
+              console.warn(
+                "⚠️  [Upload] Failed to delete old file, but new file is uploaded"
+              );
+            }
+          } catch (error) {
+            console.error("❌ [Upload] Error deleting old file:", error);
+          }
+
+          console.log("🎉 [Upload] File replacement complete!");
+        } else {
+          console.error(
+            "❌ [Upload] Failed to upload new file, keeping old one"
+          );
+        }
       }
 
       // Only clear segments if NOT loading a saved project
@@ -452,11 +492,134 @@ export default function AudioUploader() {
     }
   };
 
-  const handleTranscribe = async () => {
+  // Helper function to chunk large audio files using FFmpeg
+  const chunkAudioFile = async (file: File): Promise<File[]> => {
+    const MAX_CHUNK_SIZE = 24 * 1024 * 1024; // 24MB
+
+    console.log(`🔪 [Chunking] Starting to chunk audio file: ${file.name}`);
+    console.log(
+      `📦 [Chunking] File size: ${(file.size / 1024 / 1024).toFixed(2)} MB`
+    );
+
+    // If file is small enough, return as-is
+    if (file.size < MAX_CHUNK_SIZE) {
+      console.log(`✅ [Chunking] File is small enough, no chunking needed`);
+      return [file];
+    }
+
+    try {
+      console.log(`🎬 [Chunking] Loading FFmpeg...`);
+      const ffmpeg = await loadFFmpeg();
+
+      // Get audio duration first
+      const audio = document.createElement("audio");
+      audio.src = URL.createObjectURL(file);
+      await new Promise((resolve) => {
+        audio.onloadedmetadata = resolve;
+      });
+      const duration = audio.duration;
+      URL.revokeObjectURL(audio.src);
+
+      console.log(`🎵 [Chunking] Audio duration: ${duration.toFixed(2)}s`);
+
+      // Calculate number of chunks needed based on FILE SIZE (not duration)
+      const numChunks = Math.ceil(file.size / MAX_CHUNK_SIZE);
+      const chunkDuration = duration / numChunks; // Divide duration evenly
+
+      console.log(
+        `🔪 [Chunking] Will create ${numChunks} chunks based on file size (${(
+          MAX_CHUNK_SIZE /
+          1024 /
+          1024
+        ).toFixed(0)}MB max per chunk)`
+      );
+      console.log(
+        `⏱️ [Chunking] Each chunk will be ~${(chunkDuration / 60).toFixed(
+          1
+        )} minutes`
+      );
+
+      // Write input file to FFmpeg filesystem
+      const arrayBuffer = await file.arrayBuffer();
+      await ffmpeg.writeFile("input.mp3", new Uint8Array(arrayBuffer));
+
+      const chunks: File[] = [];
+
+      for (let i = 0; i < numChunks; i++) {
+        const startTime = i * chunkDuration;
+        const endTime = Math.min((i + 1) * chunkDuration, duration);
+
+        console.log(
+          `🔪 [Chunking] Creating chunk ${
+            i + 1
+          }/${numChunks}: ${startTime.toFixed(2)}s - ${endTime.toFixed(2)}s`
+        );
+
+        const outputName = `chunk_${i}.mp3`;
+
+        // Use FFmpeg to cut the file (copy codec, no re-encoding!)
+        await ffmpeg.exec([
+          "-i",
+          "input.mp3",
+          "-ss",
+          startTime.toString(),
+          "-to",
+          endTime.toString(),
+          "-c",
+          "copy", // Just copy, no re-encoding!
+          outputName,
+        ]);
+
+        // Read the chunk file
+        const chunkData = await ffmpeg.readFile(outputName);
+        // Convert to standard Uint8Array to avoid type issues
+        const uint8Data =
+          chunkData instanceof Uint8Array
+            ? new Uint8Array(chunkData)
+            : new TextEncoder().encode(chunkData as string);
+        const chunkBlob = new Blob([uint8Data], { type: "audio/mpeg" });
+        const chunkFile = new File(
+          [chunkBlob],
+          `${file.name.replace(".mp3", "")}_chunk_${i + 1}.mp3`,
+          { type: "audio/mpeg" }
+        );
+
+        chunks.push(chunkFile);
+        console.log(
+          `✅ [Chunking] Chunk ${i + 1} created: ${(
+            chunkFile.size /
+            1024 /
+            1024
+          ).toFixed(2)} MB`
+        );
+
+        // Clean up
+        await ffmpeg.deleteFile(outputName);
+      }
+
+      // Clean up input file
+      await ffmpeg.deleteFile("input.mp3");
+
+      console.log(`🎉 [Chunking] All chunks created successfully!`);
+      return chunks;
+    } catch (error) {
+      console.error("❌ [Chunking] Error chunking audio:", error);
+      // If chunking fails, return empty array (will show error to user)
+      alert(
+        "Failed to chunk large audio file. Please try compressing it first or use a shorter audio clip."
+      );
+      return [];
+    }
+  };
+
+  const handleTranscribe = async (forceRefresh = false) => {
     if (!selectedSurah) return;
 
+    // Determine which transcription to use
+    const cachedTranscription = forceRefresh ? null : whisperTranscription;
+
     // Check if we need an audio file (only if no cached transcription)
-    if (!whisperTranscription && !audioFile) {
+    if (!cachedTranscription && !audioFile) {
       alert("Please upload an audio file first.");
       return;
     }
@@ -464,56 +627,214 @@ export default function AudioUploader() {
     setIsTranscribing(true);
     setSegments([]);
     setOriginalSegments([]);
+    setTranscriptionProgress({
+      current: 0,
+      total: 0,
+      percentage: 0,
+      message: "",
+    });
 
     try {
-      const formData = new FormData();
+      let finalTranscription = cachedTranscription;
+      const allMappedSegments: Segment[] = []; // Collect mapped segments from all chunks
 
-      // If we have cached transcription, use it (saves Whisper cost!)
-      if (whisperTranscription) {
+      // If we don't have cached transcription, need to transcribe with Whisper
+      if (!finalTranscription && audioFile) {
         console.log(
-          `♻️ Using cached Whisper (${whisperTranscription.segments.length} segments) + AI mapping`
+          forceRefresh
+            ? `🔄 FORCING FRESH Whisper transcription for ${audioFile.name}`
+            : `🎤 Starting Whisper transcription for ${audioFile.name}`
         );
-        formData.append(
-          "cachedTranscription",
-          JSON.stringify(whisperTranscription)
-        );
-      } else {
+
+        // Step 1: Chunk the audio file
+        setTranscriptionProgress({
+          current: 0,
+          total: 1,
+          percentage: 0,
+          message: "Preparing audio chunks...",
+        });
+
+        const chunks = await chunkAudioFile(audioFile);
+        console.log(`📦 Created ${chunks.length} chunk(s)`);
+
+        if (chunks.length === 0) {
+          throw new Error("Failed to create audio chunks");
+        }
+
+        // Get total audio duration to calculate chunk duration
+        const audio = document.createElement("audio");
+        audio.src = URL.createObjectURL(audioFile);
+        await new Promise((resolve) => {
+          audio.onloadedmetadata = resolve;
+        });
+        const totalDuration = audio.duration;
+        URL.revokeObjectURL(audio.src);
+
+        const chunkDuration = totalDuration / chunks.length;
         console.log(
-          `🤖 Whisper transcription + AI mapping for Surah ${selectedSurah}`
+          `⏱️ Calculated chunk duration: ${(chunkDuration / 60).toFixed(
+            1
+          )} minutes per chunk`
         );
-        formData.append("file", audioFile!);
-      }
 
-      formData.append("surahNumber", selectedSurah.toString());
+        // Step 2A: Transcribe ALL audio chunks first (collect all Whisper segments)
+        const allSegments: { start: number; end: number; text: string }[] = [];
 
-      const response = await fetch("/api/transcribe-ai", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
-
-      if (data.segments) {
-        console.log(`✅ Detection complete: ${data.segments.length} segments`);
         console.log(
-          `📊 Alignment confidence: ${data.alignment?.confidence?.toFixed(2)}`
+          `🎤 Starting Whisper transcription for ${chunks.length} audio chunks...`
         );
 
-        setOriginalSegments(data.segments);
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          const chunkNum = i + 1;
 
-        // Cache the transcription if it's new
-        let newTranscription = whisperTranscription;
-        if (data.transcription && !whisperTranscription) {
-          newTranscription = {
-            segments: data.transcription.segments || [],
-            text: data.transcription.text || "",
-          };
+          // ✅ Calculate ACTUAL time offset from chunk position (prevents drift!)
+          const actualTimeOffset = i * chunkDuration; // Dynamic based on file size
+
+          setTranscriptionProgress({
+            current: chunkNum,
+            total: chunks.length,
+            percentage: Math.round((chunkNum / chunks.length) * 60), // 0-60% for transcription
+            message: `Transcribing audio chunk ${chunkNum}/${chunks.length}...`,
+          });
 
           console.log(
-            `💾 Whisper transcription cached (${newTranscription.segments.length} segments)`
+            `🎤 [Transcribe ${chunkNum}/${
+              chunks.length
+            }] Processing chunk at ${actualTimeOffset.toFixed(2)}s...`
           );
-          setWhisperTranscription(newTranscription);
+
+          const formData = new FormData();
+          formData.append("file", chunk);
+          formData.append("chunkIndex", i.toString());
+          formData.append("totalChunks", chunks.length.toString());
+          formData.append("timeOffset", actualTimeOffset.toString()); // ✅ Use actual position
+
+          const response = await fetch("/api/transcribe-chunk", {
+            method: "POST",
+            body: formData,
+          });
+
+          const data = await response.json();
+
+          if (data.error) {
+            throw new Error(
+              `Chunk ${chunkNum} transcription failed: ${data.error}`
+            );
+          }
+
+          if (data.segments && data.segments.length > 0) {
+            allSegments.push(...data.segments);
+
+            console.log(
+              `✅ [Transcribe ${chunkNum}] Got ${
+                data.segments.length
+              } segments (total: ${
+                allSegments.length
+              }, offset: ${actualTimeOffset.toFixed(2)}s)`
+            );
+          }
         }
+
+        // Merge and cache all transcriptions
+        finalTranscription = {
+          segments: allSegments,
+          text: allSegments.map((s) => s.text).join(" "),
+        };
+
+        console.log(
+          `🎉 Whisper complete! Total: ${finalTranscription.segments.length} segments`
+        );
+        setWhisperTranscription(finalTranscription);
+
+        // Save Whisper transcription to localStorage
+        if (currentProjectId) {
+          const existingProject = getProject(currentProjectId);
+          if (existingProject) {
+            saveProject({
+              ...existingProject,
+              whisperTranscription: finalTranscription,
+              lastModified: new Date().toISOString(),
+            });
+            console.log(
+              `💾 Saved Whisper cache to localStorage (${allSegments.length} segments)`
+            );
+          }
+        }
+      } else if (finalTranscription) {
+        console.log(
+          `📦 Using cached Whisper transcription (${finalTranscription.segments.length} segments)`
+        );
+      }
+
+      // Step 2: AI Mapping (runs whether using cached or fresh Whisper data)
+      if (finalTranscription) {
+        const totalAyahs =
+          SURAHS.find((s) => s.number === selectedSurah)?.ayahs || 0;
+
+        console.log(
+          `🧠 Starting AI mapping: ${finalTranscription.segments.length} Whisper segments → ${totalAyahs} ayahs (ONE API call with simplified Quran data)`
+        );
+
+        setTranscriptionProgress({
+          current: 0,
+          total: 1,
+          percentage: 80, // 80% progress
+          message: `AI mapping to ${totalAyahs} ayahs...`,
+        });
+
+        const mappingFormData = new FormData();
+        mappingFormData.append(
+          "cachedTranscription",
+          JSON.stringify(finalTranscription)
+        );
+        mappingFormData.append("surahNumber", selectedSurah.toString());
+
+        const mappingResponse = await fetch("/api/transcribe-ai", {
+          method: "POST",
+          body: mappingFormData,
+        });
+
+        const mappingData = await mappingResponse.json();
+
+        if (mappingData.error) {
+          throw new Error(`AI mapping failed: ${mappingData.error}`);
+        }
+
+        if (mappingData.segments) {
+          allMappedSegments.push(...mappingData.segments);
+          console.log(
+            `✅ AI mapping complete! Got ${mappingData.segments.length} segments`
+          );
+
+          // Save after mapping
+          setOriginalSegments(allMappedSegments);
+          if (currentProjectId) {
+            const existingProject = getProject(currentProjectId);
+            if (existingProject) {
+              saveProject({
+                ...existingProject,
+                segments: allMappedSegments,
+                whisperTranscription: finalTranscription,
+                lastModified: new Date().toISOString(),
+              });
+              console.log(
+                `💾 Saved ${allMappedSegments.length} mapped segments to localStorage`
+              );
+            }
+          }
+        }
+
+        console.log(
+          `🎉 AI mapping complete! Total mapped segments: ${allMappedSegments.length}`
+        );
+      }
+
+      // Use the mapped segments
+      if (allMappedSegments.length > 0) {
+        console.log(`✅ Final detection: ${allMappedSegments.length} segments`);
+
+        setOriginalSegments(allMappedSegments);
 
         // IMMEDIATELY save to localStorage (don't wait for user to click Save!)
         if (currentProjectId) {
@@ -521,18 +842,13 @@ export default function AudioUploader() {
           if (existingProject) {
             const updatedProject = {
               ...existingProject,
-              segments: data.segments,
-              whisperTranscription:
-                newTranscription || existingProject.whisperTranscription,
+              segments: allMappedSegments,
+              whisperTranscription: finalTranscription || undefined,
               lastModified: new Date().toISOString(),
             };
             saveProject(updatedProject);
             console.log(
-              `✅ Auto-saved to localStorage: ${data.segments.length} segments${
-                newTranscription && !whisperTranscription
-                  ? " + Whisper cache"
-                  : ""
-              }`
+              `✅ Auto-saved to localStorage: ${allMappedSegments.length} segments + Whisper cache`
             );
           }
         }
@@ -540,7 +856,7 @@ export default function AudioUploader() {
         // Show success message with stats
         const expectedAyahs =
           SURAHS.find((s) => s.number === selectedSurah)?.ayahs || 0;
-        const detectedSegments = data.segments.length;
+        const detectedSegments = allMappedSegments.length;
 
         const cachedMessage = whisperTranscription
           ? "\n\n✅ Used cached Whisper from localStorage (only GPT-4o cost)"
@@ -548,26 +864,57 @@ export default function AudioUploader() {
 
         if (Math.abs(detectedSegments - expectedAyahs) <= 5) {
           alert(
-            `🎯 GPT-4o Detection successful!\n\nDetected: ${detectedSegments} segments\nExpected: ${expectedAyahs} ayahs\nConfidence: ${(
-              data.alignment?.confidence * 100
-            )?.toFixed(1)}%${cachedMessage}`
+            `🎯 GPT-4o Detection successful!\n\nDetected: ${detectedSegments} segments\nExpected: ${expectedAyahs} ayahs${cachedMessage}`
           );
         } else {
           alert(
-            `⚠️ GPT-4o Detection completed with potential issues:\n\nDetected: ${detectedSegments} segments\nExpected: ${expectedAyahs} ayahs\nConfidence: ${(
-              data.alignment?.confidence * 100
-            )?.toFixed(
-              1
-            )}%\n\nYou may need to manually adjust some segments.${cachedMessage}`
+            `⚠️ GPT-4o Detection completed with potential issues:\n\nDetected: ${detectedSegments} segments\nExpected: ${expectedAyahs} ayahs\n\nYou may need to manually adjust some segments.${cachedMessage}`
           );
         }
       }
     } catch (error) {
       console.error("AI detection failed:", error);
-      alert("AI detection failed. Please try again or use silence detection.");
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
+      alert(
+        `AI detection failed: ${errorMessage}\n\nPlease try again or use silence detection.`
+      );
     } finally {
       setIsTranscribing(false);
+      setTranscriptionProgress({
+        current: 0,
+        total: 0,
+        percentage: 0,
+        message: "",
+      });
     }
+  };
+
+  const handleFreshWhisperTranscription = async () => {
+    if (!selectedSurah) return;
+
+    console.log(
+      "🗑️ Clearing cached Whisper transcription and forcing fresh transcription..."
+    );
+
+    // Clear cached Whisper transcription from state
+    setWhisperTranscription(null);
+
+    // Clear from localStorage immediately
+    if (currentProjectId) {
+      const existingProject = getProject(currentProjectId);
+      if (existingProject) {
+        saveProject({
+          ...existingProject,
+          whisperTranscription: undefined,
+          lastModified: new Date().toISOString(),
+        });
+        console.log("✅ Cleared cached Whisper transcription from storage");
+      }
+    }
+
+    // Run fresh transcription with forceRefresh=true to skip cache
+    await handleTranscribe(true);
   };
 
   const handleSilenceDetection = async () => {
@@ -997,7 +1344,7 @@ export default function AudioUploader() {
                                 : "Detect by Silence"}
                             </Button>
                             <Button
-                              onClick={handleTranscribe}
+                              onClick={() => handleTranscribe(false)}
                               disabled={isTranscribing || !selectedSurah}
                               variant="outline"
                               className="cursor-pointer transition-all duration-200 hover:bg-accent"
@@ -1008,7 +1355,36 @@ export default function AudioUploader() {
                                 ? "Re-map with AI (Cheap)"
                                 : "Whisper + AI Detection"}
                             </Button>
-                            {whisperTranscription && (
+
+                            {/* Progress indicator */}
+                            {isTranscribing &&
+                              transcriptionProgress.message && (
+                                <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-950 rounded-md">
+                                  <div className="flex items-center justify-between text-sm">
+                                    <span className="font-medium text-blue-700 dark:text-blue-300">
+                                      {transcriptionProgress.message}
+                                    </span>
+                                    {transcriptionProgress.total > 0 && (
+                                      <span className="text-blue-600 dark:text-blue-400">
+                                        {transcriptionProgress.current}/
+                                        {transcriptionProgress.total}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {transcriptionProgress.percentage > 0 && (
+                                    <div className="w-full bg-blue-200 dark:bg-blue-900 rounded-full h-2">
+                                      <div
+                                        className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full transition-all duration-300"
+                                        style={{
+                                          width: `${transcriptionProgress.percentage}%`,
+                                        }}
+                                      ></div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                            {whisperTranscription && !isTranscribing && (
                               <p className="text-xs text-green-600 flex items-center gap-1">
                                 <FiCheckCircle size={12} />
                                 Whisper cached in localStorage - only GPT-4o
@@ -1021,9 +1397,9 @@ export default function AudioUploader() {
                             <span>
                               <strong>Silence Detection:</strong> Fast & offline
                               <br />
-                              <strong>Whisper + GPT-4o:</strong> Transcribes
-                              once (Whisper), cached to localStorage. Re-mapping
-                              only costs GPT-4o tokens (cheap!)
+                              <strong>Whisper + AI:</strong> Transcribes once
+                              (Whisper), cached to localStorage. Re-mapping only
+                              costs AI tokens (cheap!)
                             </span>
                           </p>
                         </div>
@@ -1101,41 +1477,54 @@ export default function AudioUploader() {
 
                     {/* Re-run detection options when segments exist */}
                     {segments.length > 0 && (
-                      <div className="space-y-2">
-                        <Label className="text-sm font-medium">
-                          Re-run Detection
-                        </Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Button
-                            onClick={handleSilenceDetection}
-                            disabled={isDetectingSilence}
-                            variant="outline"
-                            size="sm"
-                            className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                          >
-                            {isDetectingSilence
-                              ? "Analyzing..."
-                              : "Re-detect by Silence"}
-                          </Button>
-                          <Button
-                            onClick={handleTranscribe}
-                            disabled={isTranscribing || !selectedSurah}
-                            variant="outline"
-                            size="sm"
-                            className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                          >
-                            {isTranscribing
-                              ? "AI Mapping..."
-                              : whisperTranscription
-                              ? "Re-map with AI (Cheap)"
-                              : "Re-detect with Whisper + AI"}
-                          </Button>
+                      <>
+                        <div className="space-y-2">
+                          <Label className="text-sm font-medium">
+                            Re-run Detection
+                          </Label>
+                          <div className="grid grid-cols-3 gap-2">
+                            <Button
+                              onClick={handleSilenceDetection}
+                              disabled={isDetectingSilence}
+                              variant="outline"
+                              size="sm"
+                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
+                            >
+                              {isDetectingSilence
+                                ? "Analyzing..."
+                                : "Re-detect by Silence"}
+                            </Button>
+                            <Button
+                              onClick={handleFreshWhisperTranscription}
+                              disabled={isTranscribing || !selectedSurah}
+                              variant="outline"
+                              size="sm"
+                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
+                            >
+                              {isTranscribing
+                                ? "Transcribing..."
+                                : "Re-transcribe with Whisper"}
+                            </Button>
+                            <Button
+                              onClick={() => handleTranscribe(false)}
+                              disabled={isTranscribing || !selectedSurah}
+                              variant="outline"
+                              size="sm"
+                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
+                            >
+                              {isTranscribing
+                                ? "AI Mapping..."
+                                : whisperTranscription
+                                ? "Re-map with AI (Cheap)"
+                                : "Re-detect with Whisper + AI"}
+                            </Button>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            ⚠️ This will replace current segments with new
+                            detection results
+                          </p>
                         </div>
-                        <p className="text-xs text-muted-foreground">
-                          ⚠️ This will replace current segments with new
-                          detection results
-                        </p>
-                      </div>
+                      </>
                     )}
 
                     {/* Show info if loaded project */}

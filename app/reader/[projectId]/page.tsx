@@ -132,10 +132,13 @@ export default function QuranReaderPage() {
           const verseNumber = parseInt(v.verse_key.split(":")[1]);
           let text = v.text_uthmani;
 
-          // Remove Bismillah from first ayah if not Surah 1 or 9
+          // Remove Bismillah from first ayah if present (not Surah 1 or 9)
           if (verseNumber === 1 && surahNumber !== 1 && surahNumber !== 9) {
             const words = text.split(" ");
-            if (words.length > 4) {
+            // Only remove if it actually starts with Bismillah
+            const bismillahPattern =
+              /^بِسْمِ\s+ٱللَّهِ\s+ٱلرَّحْمَ[ـٰ]نِ\s+ٱلرَّحِيمِ/;
+            if (bismillahPattern.test(text)) {
               text = words.slice(4).join(" ");
             }
           }
@@ -354,10 +357,14 @@ export default function QuranReaderPage() {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [handlePlayPause]);
 
+  // Format time as 00h:00m:00s
   const formatTime = (time: number) => {
-    const minutes = Math.floor(time / 60);
+    const hours = Math.floor(time / 3600);
+    const minutes = Math.floor((time % 3600) / 60);
     const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+    return `${hours.toString().padStart(2, "0")}h:${minutes
+      .toString()
+      .padStart(2, "0")}m:${seconds.toString().padStart(2, "0")}s`;
   };
 
   if (!project) {
@@ -792,6 +799,16 @@ export default function QuranReaderPage() {
                   >
                     <FiSkipForward />
                   </Button>
+                </div>
+
+                {/* Center-Right: Time Display */}
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-mono">
+                    {formatTime(currentTime)} / {formatTime(duration)}
+                  </div>
+                  <div className="text-xs text-muted-foreground font-mono">
+                    ({currentTime.toFixed(2)}s / {duration.toFixed(2)}s)
+                  </div>
                 </div>
 
                 {/* Right: Speed Control */}

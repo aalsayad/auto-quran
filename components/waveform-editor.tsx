@@ -51,6 +51,8 @@ export default function WaveformEditor({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -58,6 +60,17 @@ export default function WaveformEditor({
     regionId?: string;
   } | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+
+  // Format time as 00h:00m:00s
+  const formatTime = (seconds: number): string => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    return `${hours.toString().padStart(2, "0")}h:${minutes
+      .toString()
+      .padStart(2, "0")}m:${secs.toString().padStart(2, "0")}s`;
+  };
 
   // Define updateSegmentsFromRegions before useEffects
   const updateSegmentsFromRegions = useCallback(() => {
@@ -130,6 +143,7 @@ export default function WaveformEditor({
     wavesurfer.on("ready", () => {
       isLoadingRef.current = false;
       setIsReady(true);
+      setDuration(wavesurfer.getDuration());
     });
 
     wavesurfer.on("error", (error) => {
@@ -139,6 +153,10 @@ export default function WaveformEditor({
 
     wavesurfer.on("play", () => setIsPlaying(true));
     wavesurfer.on("pause", () => setIsPlaying(false));
+
+    wavesurfer.on("timeupdate", (time) => {
+      setCurrentTime(time);
+    });
 
     // Region events
     regions.on("region-clicked", (region, e) => {
@@ -519,6 +537,18 @@ export default function WaveformEditor({
           >
             <FiPlus /> Add Segment
           </Button>
+
+          {/* Time Display */}
+          {isReady && (
+            <div className="flex items-center gap-2 ml-4 text-sm">
+              <div className="font-mono">
+                {formatTime(currentTime)} / {formatTime(duration)}
+              </div>
+              <div className="text-xs text-muted-foreground font-mono">
+                ({currentTime.toFixed(2)}s / {duration.toFixed(2)}s)
+              </div>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button
