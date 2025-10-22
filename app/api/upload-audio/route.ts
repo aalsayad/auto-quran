@@ -50,16 +50,15 @@ export async function POST(request: NextRequest) {
       url: s3Url,
       fileName: file.name,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("💥 [API] Upload error:", error);
+    const errorMessage =
+      error instanceof Error ? error.message : "Upload failed";
     console.error("📋 [API] Error details:", {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
+      message: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
+      name: error instanceof Error ? error.name : undefined,
     });
-    return NextResponse.json(
-      { error: error.message || "Upload failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

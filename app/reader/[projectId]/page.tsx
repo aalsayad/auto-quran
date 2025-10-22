@@ -6,7 +6,6 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getProject, type SavedProject } from "@/lib/library-storage";
 import { SURAHS } from "@/lib/surah-data";
-import { fetchSurahText } from "@/lib/quran-api";
 import { Amiri } from "next/font/google";
 import {
   FiEdit,
@@ -18,7 +17,14 @@ import {
   FiSkipForward,
   FiRepeat,
   FiRotateCw,
+  FiList,
+  FiBook,
 } from "react-icons/fi";
+import {
+  getVersesBySurah,
+  getMushafPagesForSurah,
+  type Verse,
+} from "@/lib/local-quran-data";
 
 const amiri = Amiri({ subsets: ["arabic"], weight: ["400", "700"] });
 
@@ -34,6 +40,8 @@ export default function QuranReaderPage() {
 
   const [project, setProject] = useState<SavedProject | null>(null);
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
+  const [mushafVerses, setMushafVerses] = useState<Verse[]>([]);
+  const [viewMode, setViewMode] = useState<"list" | "mushaf">("list");
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -49,6 +57,9 @@ export default function QuranReaderPage() {
 
   // Convert to Arabic-Indic numerals
   const toArabicNumerals = (num: number): string => {
+    if (num === undefined || num === null || isNaN(num)) {
+      return "";
+    }
     const arabicNumerals = ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"];
     return num
       .toString()
@@ -100,22 +111,46 @@ export default function QuranReaderPage() {
         loadAudioFromS3(loadedProject.audioUrl, loadedProject.fileName);
       }
 
-      // Fetch full surah text from API
-      fetchSurahText(loadedProject.surahNumber).then((fetchedAyahs) => {
-        // Remove Bismillah from first ayah if not Surah 1 or 9
-        if (
-          loadedProject.surahNumber !== 1 &&
-          loadedProject.surahNumber !== 9 &&
-          fetchedAyahs.length > 0
-        ) {
-          const firstAyah = fetchedAyahs[0];
-          const words = firstAyah.text.split(" ");
-          if (words.length > 4) {
-            firstAyah.text = words.slice(4).join(" ");
+      // Fetch Quran text from LOCAL data (no API calls!)
+      const surahNumber = loadedProject.surahNumber;
+
+      // Load for List View
+      getVersesBySurah(surahNumber).then((verses) => {
+        const formattedAyahs: Ayah[] = verses.map((v) => {
+          // Extract verse number from verse_key (e.g., "1:5" -> 5)
+          const verseNumber = parseInt(v.verse_key.split(":")[1]);
+          let text = v.text_uthmani;
+
+          // Remove Bismillah from first ayah if not Surah 1 or 9
+          if (verseNumber === 1 && surahNumber !== 1 && surahNumber !== 9) {
+            const words = text.split(" ");
+            if (words.length > 4) {
+              text = words.slice(4).join(" ");
+            }
           }
-        }
-        setAyahs(fetchedAyahs);
+
+          return {
+            number: v.id,
+            text,
+            numberInSurah: verseNumber,
+          };
+        });
+        setAyahs(formattedAyahs);
       });
+
+      // Load for Mushaf View
+      getMushafPagesForSurah(surahNumber)
+        .then((verses) => {
+          console.log(`📖 Loaded ${verses.length} verses for Mushaf view`);
+          if (verses.length > 0) {
+            console.log("Sample verse:", verses[0]);
+          }
+          setMushafVerses(verses);
+        })
+        .catch((error) => {
+          console.error("❌ Failed to load Mushaf verses:", error);
+          setMushafVerses([]);
+        });
     }
   }, [projectId, loadAudioFromS3]);
 
@@ -333,6 +368,24 @@ export default function QuranReaderPage() {
               </p>
             </div>
             <div className="flex gap-2">
+              {/* View Mode Toggle */}
+              <Button
+                variant={viewMode === "list" ? "default" : "outline"}
+                className="cursor-pointer gap-2"
+                onClick={() => setViewMode("list")}
+              >
+                <FiList /> List
+              </Button>
+              <Button
+                variant={viewMode === "mushaf" ? "default" : "outline"}
+                className="cursor-pointer gap-2"
+                onClick={() => setViewMode("mushaf")}
+              >
+                <FiBook /> Mushaf
+              </Button>
+
+              <div className="w-px bg-border mx-2" />
+
               <Link href={`/editor/${project.id}`}>
                 <Button variant="outline" className="cursor-pointer gap-2">
                   <FiEdit /> Edit
@@ -348,7 +401,7 @@ export default function QuranReaderPage() {
         </div>
       </div>
 
-      {/* Quran Text - Simple List View */}
+      {/* Quran Text */}
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto">
           {/* Surah Header */}
@@ -370,27 +423,30 @@ export default function QuranReaderPage() {
             )}
           </div>
 
-          {/* Ayahs List */}
-          <div>
-            {ayahs.map((ayah, index) => {
-              const isActive = currentAyahNumbers.includes(ayah.numberInSurah);
+          {/* LIST VIEW: Simple ayah-by-ayah */}
+          {viewMode === "list" && (
+            <div>
+              {ayahs.map((ayah, index) => {
+                const isActive = currentAyahNumbers.includes(
+                  ayah.numberInSurah
+                );
 
-              return (
-                <div
-                  key={ayah.number}
-                  ref={(el) => {
-                    ayahRefs.current[index] = el;
-                  }}
-                  className={`
+                return (
+                  <div
+                    key={ayah.number}
+                    ref={(el) => {
+                      ayahRefs.current[index] = el;
+                    }}
+                    className={`
                     py-6 transition-all duration-300 cursor-pointer
                     border-b border-border/40
                     ${isActive ? "bg-primary/5" : "hover:bg-muted/30"}
                   `}
-                  onClick={() => handleAyahClick(ayah.numberInSurah)}
-                >
-                  <div className="flex items-start gap-4 px-2">
-                    <div
-                      className={`
+                    onClick={() => handleAyahClick(ayah.numberInSurah)}
+                  >
+                    <div className="flex items-start gap-4 px-2">
+                      <div
+                        className={`
                         shrink-0 w-10 h-10 rounded-full 
                         flex items-center justify-center
                         transition-colors
@@ -400,28 +456,171 @@ export default function QuranReaderPage() {
                             : "bg-muted text-muted-foreground"
                         }
                       `}
-                    >
-                      <span className="text-sm font-semibold">
-                        {toArabicNumerals(ayah.numberInSurah)}
-                      </span>
-                    </div>
-                    <div className="flex-1">
-                      <p
-                        className={`
+                      >
+                        <span className="text-sm font-semibold">
+                          {toArabicNumerals(ayah.numberInSurah)}
+                        </span>
+                      </div>
+                      <div className="flex-1">
+                        <p
+                          className={`
                           text-right text-2xl leading-loose ${amiri.className}
                           ${isActive ? "text-primary font-semibold" : ""}
                         `}
-                        dir="rtl"
-                        lang="ar"
-                      >
-                        {ayah.text} {getVerseMarker(ayah.numberInSurah)}
-                      </p>
+                          dir="rtl"
+                          lang="ar"
+                        >
+                          {ayah.text} {getVerseMarker(ayah.numberInSurah)}
+                        </p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* MUSHAF VIEW: Page-by-page with line breaks */}
+          {viewMode === "mushaf" && (
+            <div className="space-y-8">
+              {mushafVerses.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">
+                  Loading Mushaf view...
+                </p>
+              ) : (
+                (() => {
+                  // Group verses by page for better organization
+                  const pageGroups: Record<number, Verse[]> = {};
+                  mushafVerses.forEach((v) => {
+                    if (!v.page_number) return; // Skip if no page number
+                    if (!pageGroups[v.page_number]) {
+                      pageGroups[v.page_number] = [];
+                    }
+                    pageGroups[v.page_number].push(v);
+                  });
+
+                  return Object.entries(pageGroups).map(([pageNum, verses]) => (
+                    <div key={pageNum} className="space-y-4">
+                      <div className="text-center text-sm text-muted-foreground mb-4 pb-2 border-b">
+                        صفحة {toArabicNumerals(parseInt(pageNum))}
+                      </div>
+
+                      {/* Group by line number within page */}
+                      {(() => {
+                        const lineGroups: Record<number, Verse[]> = {};
+                        verses.forEach((v) => {
+                          if (v.words) {
+                            v.words.forEach((word) => {
+                              if (!lineGroups[word.line_number]) {
+                                lineGroups[word.line_number] = [];
+                              }
+                              // Add verse if not already in this line group
+                              if (
+                                !lineGroups[word.line_number].find(
+                                  (lv) => lv.id === v.id
+                                )
+                              ) {
+                                lineGroups[word.line_number].push(v);
+                              }
+                            });
+                          }
+                        });
+
+                        return Object.entries(lineGroups)
+                          .sort(([a], [b]) => parseInt(a) - parseInt(b))
+                          .map(([lineNum, lineVerses]) => (
+                            <div
+                              key={`line-${lineNum}`}
+                              className={`
+                                text-right leading-loose px-4 py-2
+                                ${amiri.className}
+                              `}
+                              style={{
+                                textAlign: 'justify',
+                                textAlignLast: 'right',
+                              }}
+                              dir="rtl"
+                              lang="ar"
+                            >
+                              {lineVerses.map((verse) => {
+                                // Skip if verse doesn't have required data
+                                if (!verse.verse_key || !verse.id) {
+                                  return null;
+                                }
+
+                                // Use verse_number from API if available, fallback to parsing verse_key
+                                const verseNumber =
+                                  verse.verse_number ||
+                                  parseInt(verse.verse_key.split(":")[1]);
+
+                                const isActive =
+                                  currentAyahNumbers.includes(verseNumber);
+
+                                // Get words for this line, filter out "end" markers
+                                const lineWords =
+                                  verse.words?.filter(
+                                    (w) =>
+                                      w.line_number === parseInt(lineNum) &&
+                                      w.char_type_name === "word"
+                                  ) || [];
+
+                                return (
+                                  <span
+                                    key={verse.id}
+                                    onClick={() => handleAyahClick(verseNumber)}
+                                    className={`
+                                      cursor-pointer transition-colors inline
+                                      ${
+                                        isActive
+                                          ? "bg-primary/10 text-primary font-semibold"
+                                          : "hover:bg-muted/50"
+                                      }
+                                    `}
+                                  >
+                                    {lineWords.map((word, idx) => (
+                                      <span key={word.id} className="text-3xl">
+                                        {word.text_uthmani}
+                                        {idx < lineWords.length - 1 ? " " : ""}
+                                      </span>
+                                    ))}{" "}
+                                    {/* Check if this is the last word of the verse */}
+                                    {(() => {
+                                      if (
+                                        !verse.words ||
+                                        lineWords.length === 0
+                                      )
+                                        return null;
+                                      const lastLineWordId =
+                                        lineWords[lineWords.length - 1]?.id;
+                                      // Get the last actual word (not "end" marker) from verse
+                                      const allVerseWords = verse.words.filter(
+                                        (w) => w.char_type_name === "word"
+                                      );
+                                      const lastVerseWordId =
+                                        allVerseWords[allVerseWords.length - 1]
+                                          ?.id;
+
+                                      if (lastLineWordId === lastVerseWordId) {
+                                        return (
+                                          <span className="text-2xl mx-1">
+                                            {getVerseMarker(verseNumber)}
+                                          </span>
+                                        );
+                                      }
+                                      return null;
+                                    })()}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          ));
+                      })()}
+                    </div>
+                  ));
+                })()
+              )}
+            </div>
+          )}
         </div>
       </div>
 

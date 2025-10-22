@@ -19,6 +19,10 @@ export interface SavedProject {
   minSilenceDuration?: number;
   endPadding?: number;
   startPadding?: number;
+  whisperTranscription?: {
+    segments: { start: number; end: number; text: string }[];
+    text: string;
+  };
 }
 
 const STORAGE_KEY = "quran-splitter-library";
