@@ -7,27 +7,76 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File;
-    const chunkIndex = parseInt(formData.get("chunkIndex") as string);
-    const totalChunks = parseInt(formData.get("totalChunks") as string);
-    const timeOffset = parseFloat(formData.get("timeOffset") as string) || 0;
+    let file: File;
+    let chunkIndex: number;
+    let totalChunks: number;
+    let timeOffset: number;
 
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    // Try JSON first (S3 URL), fall back to FormData
+    const contentType = request.headers.get("content-type") || "";
+
+    if (contentType.includes("application/json")) {
+      // New way: Download from S3
+      const body = await request.json();
+      const {
+        audioUrl,
+        chunkIndex: idx,
+        totalChunks: total,
+        timeOffset: offset,
+      } = body;
+
+      chunkIndex = idx;
+      totalChunks = total;
+      timeOffset = offset || 0;
+
+      if (!audioUrl) {
+        return NextResponse.json(
+          { error: "No audioUrl provided" },
+          { status: 400 }
+        );
+      }
+
+      console.log(
+        `🎤 [Chunk ${chunkIndex + 1}/${totalChunks}] Downloading from S3...`
+      );
+      console.log(`🔗 [Chunk ${chunkIndex + 1}] URL: ${audioUrl}`);
+
+      const audioResponse = await fetch(audioUrl);
+      if (!audioResponse.ok) {
+        throw new Error("Failed to download audio chunk from S3");
+      }
+
+      const audioBlob = await audioResponse.blob();
+      file = new File([audioBlob], `whisper-chunk-${chunkIndex}.mp3`, {
+        type: "audio/mpeg",
+      });
+
+      console.log(`✅ [Chunk ${chunkIndex + 1}] Downloaded from S3`);
+    } else {
+      // Old way: Direct file upload (fallback for small files)
+      const formData = await request.formData();
+      const uploadedFile = formData.get("file") as File;
+      chunkIndex = parseInt(formData.get("chunkIndex") as string);
+      totalChunks = parseInt(formData.get("totalChunks") as string);
+      timeOffset = parseFloat(formData.get("timeOffset") as string) || 0;
+
+      if (!uploadedFile) {
+        return NextResponse.json(
+          { error: "No file provided" },
+          { status: 400 }
+        );
+      }
+
+      file = uploadedFile;
+      console.log(
+        `🎤 [Chunk ${chunkIndex + 1}/${totalChunks}] Using uploaded file`
+      );
     }
 
     console.log(
-      `🎤 [Chunk ${
-        chunkIndex + 1
-      }/${totalChunks}] Starting Whisper transcription`
-    );
-    console.log(
-      `📦 [Chunk ${chunkIndex + 1}] File size: ${(
-        file.size /
-        1024 /
-        1024
-      ).toFixed(2)} MB`
+      `📦 [Chunk ${chunkIndex + 1}] Size: ${(file.size / 1024 / 1024).toFixed(
+        2
+      )} MB`
     );
     console.log(
       `⏰ [Chunk ${chunkIndex + 1}] Time offset: ${timeOffset.toFixed(2)}s`

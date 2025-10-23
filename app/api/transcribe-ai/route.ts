@@ -94,12 +94,8 @@ async function alignTextToAyahs(
  */
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
-    const file = formData.get("file") as File | null;
-    const surahNumber = parseInt(formData.get("surahNumber") as string);
-    const cachedTranscriptionStr = formData.get("cachedTranscription") as
-      | string
-      | null;
+    const body = await request.json();
+    const { audioUrl, surahNumber, cachedTranscription } = body;
 
     if (!surahNumber) {
       return NextResponse.json(
@@ -111,13 +107,15 @@ export async function POST(request: NextRequest) {
     let transcription: WhisperTranscription;
 
     // Use cached Whisper transcription if available
-    if (cachedTranscriptionStr) {
+    if (cachedTranscription) {
       try {
-        const parsed = JSON.parse(cachedTranscriptionStr);
-        if (!parsed.segments || !Array.isArray(parsed.segments)) {
+        if (
+          !cachedTranscription.segments ||
+          !Array.isArray(cachedTranscription.segments)
+        ) {
           throw new Error("Invalid transcription format");
         }
-        transcription = parsed as WhisperTranscription;
+        transcription = cachedTranscription;
         console.log(
           `♻️ Using cached Whisper (${transcription.segments.length} segments)`
         );
@@ -129,17 +127,30 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // Transcribe with Whisper
-      if (!file) {
+      if (!audioUrl) {
         return NextResponse.json(
-          { error: "No file or cached transcription provided" },
+          { error: "No audioUrl or cached transcription provided" },
           { status: 400 }
         );
       }
 
+      console.log(`🎵 Downloading from S3: ${audioUrl}`);
+
+      // Download file from S3
+      const audioResponse = await fetch(audioUrl);
+      if (!audioResponse.ok) {
+        throw new Error("Failed to download audio from S3");
+      }
+
+      const audioBlob = await audioResponse.blob();
+      const audioFile = new File([audioBlob], "audio.mp3", {
+        type: "audio/mpeg",
+      });
+
       console.log(`🎵 Transcribing with Whisper for Surah ${surahNumber}...`);
 
       const whisperResult = await openai.audio.transcriptions.create({
-        file: file,
+        file: audioFile,
         model: "whisper-1",
         language: "ar",
         response_format: "verbose_json",

@@ -525,7 +525,9 @@ export default function AudioUploader() {
   };
 
   // Helper function to chunk large audio files using FFmpeg
-  const chunkAudioFile = async (file: File): Promise<File[]> => {
+  const chunkAudioFile = async (
+    file: File
+  ): Promise<{ chunks: File[]; chunkUrls: string[] }> => {
     const MAX_CHUNK_SIZE = 24 * 1024 * 1024; // 24MB
 
     console.log(`🔪 [Chunking] Starting to chunk audio file: ${file.name}`);
@@ -536,7 +538,7 @@ export default function AudioUploader() {
     // If file is small enough, return as-is
     if (file.size < MAX_CHUNK_SIZE) {
       console.log(`✅ [Chunking] File is small enough, no chunking needed`);
-      return [file];
+      return { chunks: [file], chunkUrls: [] }; // Empty array means no temp chunks to clean
     }
 
     try {
@@ -576,6 +578,7 @@ export default function AudioUploader() {
       await ffmpeg.writeFile("input.mp3", new Uint8Array(arrayBuffer));
 
       const chunks: File[] = [];
+      const chunkUrls: string[] = [];
 
       for (let i = 0; i < numChunks; i++) {
         const startTime = i * chunkDuration;
@@ -610,11 +613,9 @@ export default function AudioUploader() {
             ? new Uint8Array(chunkData)
             : new TextEncoder().encode(chunkData as string);
         const chunkBlob = new Blob([uint8Data], { type: "audio/mpeg" });
-        const chunkFile = new File(
-          [chunkBlob],
-          `${file.name.replace(".mp3", "")}_chunk_${i + 1}.mp3`,
-          { type: "audio/mpeg" }
-        );
+        const chunkFile = new File([chunkBlob], `chunk_${i}.mp3`, {
+          type: "audio/mpeg",
+        });
 
         chunks.push(chunkFile);
         console.log(
@@ -625,22 +626,57 @@ export default function AudioUploader() {
           ).toFixed(2)} MB`
         );
 
-        // Clean up
+        // Upload chunk to S3 with whisper-chunk- prefix
+        console.log(
+          `☁️  [Chunking] Uploading chunk ${i + 1}/${numChunks} to S3...`
+        );
+
+        const presignedResponse = await fetch("/api/upload-audio", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileName: `whisper-chunk-${Date.now()}-${i}.mp3`,
+            contentType: chunkFile.type,
+          }),
+        });
+
+        if (!presignedResponse.ok) {
+          throw new Error(`Failed to get presigned URL for chunk ${i + 1}`);
+        }
+
+        const { uploadUrl, fileUrl } = await presignedResponse.json();
+
+        const uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": chunkFile.type },
+          body: chunkFile,
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error(`Failed to upload chunk ${i + 1} to S3`);
+        }
+
+        chunkUrls.push(fileUrl);
+        console.log(`✅ [Chunking] Chunk ${i + 1}/${numChunks} uploaded to S3`);
+
+        // Clean up FFmpeg file
         await ffmpeg.deleteFile(outputName);
       }
 
       // Clean up input file
       await ffmpeg.deleteFile("input.mp3");
 
-      console.log(`🎉 [Chunking] All chunks created successfully!`);
-      return chunks;
+      console.log(
+        `🎉 [Chunking] All ${numChunks} chunks created and uploaded!`
+      );
+      return { chunks, chunkUrls };
     } catch (error) {
       console.error("❌ [Chunking] Error chunking audio:", error);
-      // If chunking fails, return empty array (will show error to user)
+      // If chunking fails, return empty arrays (will show error to user)
       alert(
         "Failed to chunk large audio file. Please try compressing it first or use a shorter audio clip."
       );
-      return [];
+      return { chunks: [], chunkUrls: [] };
     }
   };
 
@@ -666,6 +702,8 @@ export default function AudioUploader() {
       message: "",
     });
 
+    let chunkUrls: string[] = []; // Track chunk URLs for cleanup
+
     try {
       let finalTranscription = cachedTranscription;
       const allMappedSegments: Segment[] = []; // Collect mapped segments from all chunks
@@ -686,7 +724,10 @@ export default function AudioUploader() {
           message: "Preparing audio chunks...",
         });
 
-        const chunks = await chunkAudioFile(audioFile);
+        const { chunks, chunkUrls: tempChunkUrls } = await chunkAudioFile(
+          audioFile
+        );
+        chunkUrls = tempChunkUrls; // Save for cleanup in finally block
         console.log(`📦 Created ${chunks.length} chunk(s)`);
 
         if (chunks.length === 0) {
@@ -717,7 +758,6 @@ export default function AudioUploader() {
         );
 
         for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
           const chunkNum = i + 1;
 
           // ✅ Calculate ACTUAL time offset from chunk position (prevents drift!)
@@ -736,15 +776,16 @@ export default function AudioUploader() {
             }] Processing chunk at ${actualTimeOffset.toFixed(2)}s...`
           );
 
-          const formData = new FormData();
-          formData.append("file", chunk);
-          formData.append("chunkIndex", i.toString());
-          formData.append("totalChunks", chunks.length.toString());
-          formData.append("timeOffset", actualTimeOffset.toString()); // ✅ Use actual position
-
+          // Use S3 URL if available (for chunked files), otherwise fall back to direct upload
           const response = await fetch("/api/transcribe-chunk", {
             method: "POST",
-            body: formData,
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              audioUrl: chunkUrls[i], // Use S3 URL from chunk upload
+              chunkIndex: i,
+              totalChunks: chunks.length,
+              timeOffset: actualTimeOffset,
+            }),
           });
 
           const data = await response.json();
@@ -815,16 +856,13 @@ export default function AudioUploader() {
           message: `AI mapping to ${totalAyahs} ayahs...`,
         });
 
-        const mappingFormData = new FormData();
-        mappingFormData.append(
-          "cachedTranscription",
-          JSON.stringify(finalTranscription)
-        );
-        mappingFormData.append("surahNumber", selectedSurah.toString());
-
         const mappingResponse = await fetch("/api/transcribe-ai", {
           method: "POST",
-          body: mappingFormData,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cachedTranscription: finalTranscription,
+            surahNumber: selectedSurah,
+          }),
         });
 
         const mappingData = await mappingResponse.json();
@@ -912,6 +950,37 @@ export default function AudioUploader() {
         `AI detection failed: ${errorMessage}\n\nPlease try again or use silence detection.`
       );
     } finally {
+      // GUARANTEED CLEANUP - Always runs, even on error!
+      if (chunkUrls.length > 0) {
+        console.log(
+          `🗑️  Cleaning up ${chunkUrls.length} temporary chunks from S3...`
+        );
+
+        const deletePromises = chunkUrls.map(async (chunkUrl) => {
+          try {
+            const response = await fetch("/api/delete-audio", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ audioUrl: chunkUrl }),
+            });
+
+            if (response.ok) {
+              console.log(`✅ Deleted: ${chunkUrl.split("/").pop()}`);
+            } else {
+              console.warn(
+                `⚠️  Failed to delete: ${chunkUrl.split("/").pop()}`
+              );
+            }
+          } catch (error) {
+            console.error(`❌ Error deleting chunk: ${chunkUrl}`, error);
+          }
+        });
+
+        // Delete all chunks in parallel
+        await Promise.all(deletePromises);
+        console.log("✅ Cleanup complete!");
+      }
+
       setIsTranscribing(false);
       setTranscriptionProgress({
         current: 0,
