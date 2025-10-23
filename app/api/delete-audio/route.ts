@@ -35,16 +35,15 @@ export async function POST(request: NextRequest) {
         message: "Failed to delete from S3, but project can still be deleted",
       });
     }
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("💥 [API] Delete error:", error);
+    const errorMessage =
+      error instanceof Error ? error.message : "Delete failed";
     console.error("📋 [API] Error details:", {
-      message: error.message,
-      stack: error.stack,
-      name: error.name,
+      message: errorMessage,
+      stack: error instanceof Error ? error.stack : undefined,
+      name: error instanceof Error ? error.name : undefined,
     });
-    return NextResponse.json(
-      { error: error.message || "Delete failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

@@ -2,6 +2,7 @@ interface SilenceSegment {
   start: number;
   end: number;
   text: string;
+  confidence: number;
 }
 
 export interface SilenceDetectionOptions {
@@ -17,8 +18,11 @@ export async function detectSilenceSegments(
   }
 ): Promise<SilenceSegment[]> {
   // Create audio context
-  const audioContext = new (window.AudioContext ||
-    (window as any).webkitAudioContext)();
+  const AudioContextClass =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext: typeof AudioContext })
+      .webkitAudioContext;
+  const audioContext = new AudioContextClass();
 
   // Read and decode audio file
   const arrayBuffer = await audioFile.arrayBuffer();
@@ -87,6 +91,7 @@ export async function detectSilenceSegments(
         start: segmentStart,
         end: silence.start,
         text: "", // No text available from silence detection
+        confidence: 0, // Silence detection has no confidence score
       });
     }
     // Next segment starts after this silence
@@ -100,6 +105,7 @@ export async function detectSilenceSegments(
       start: segmentStart,
       end: totalDuration,
       text: "",
+      confidence: 0, // Silence detection has no confidence score
     });
   }
 

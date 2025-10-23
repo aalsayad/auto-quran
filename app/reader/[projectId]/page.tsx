@@ -19,6 +19,10 @@ import {
   FiRotateCw,
   FiList,
   FiBook,
+  FiVolume2,
+  FiVolume,
+  FiVolume1,
+  FiVolumeX,
 } from "react-icons/fi";
 import {
   getVersesBySurah,
@@ -49,13 +53,21 @@ export default function QuranReaderPage() {
   const [currentTime, setCurrentTime] = useState(0);
   const [currentAyahNumbers, setCurrentAyahNumbers] = useState<number[]>([]);
   const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isFetchingAudio, setIsFetchingAudio] = useState(false);
   const [isLooping, setIsLooping] = useState(false);
   const [isLoopingAyah, setIsLoopingAyah] = useState(false);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const ayahRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const ayahRefs = useRef<(HTMLDivElement | HTMLSpanElement | null)[]>([]);
+  const volumeRef = useRef<HTMLDivElement>(null);
+
+  // Detect if device is iOS/iPadOS where volume control is not supported
+  const isIOS =
+    typeof window !== "undefined" &&
+    /iPad|iPhone|iPod/.test(navigator.userAgent);
 
   // Convert to Arabic-Indic numerals
   const toArabicNumerals = (num: number): string => {
@@ -119,7 +131,10 @@ export default function QuranReaderPage() {
 
       // Auto-load audio from S3 if available
       if (loadedProject.audioUrl) {
-        loadAudioFromS3(loadedProject.audioUrl, loadedProject.fileName);
+        loadAudioFromS3(
+          loadedProject.audioUrl,
+          loadedProject.fileName || loadedProject.audioFileName || "audio.mp3"
+        );
       }
 
       // Fetch Quran text from LOCAL data (no API calls!)
@@ -183,8 +198,42 @@ export default function QuranReaderPage() {
 
       // Find current ayah based on project segments
       if (project?.segments) {
+        // For ayah looping, we need to check if we're past a segment end
+        // BEFORE we try to find the current segment (which would fail if time >= seg.end)
+        if (isLoopingAyah && currentAyahNumbers.length > 0) {
+          const loopSegment = project.segments.find(
+            (seg: {
+              ayahNumbers?: number[];
+              ayahNumber?: number;
+              start: number;
+              end: number;
+            }) =>
+              seg.ayahNumbers?.some((num: number) =>
+                currentAyahNumbers.includes(num)
+              ) ||
+              (seg.ayahNumber !== undefined &&
+                currentAyahNumbers.includes(seg.ayahNumber))
+          );
+
+          if (loopSegment && time >= loopSegment.end) {
+            // Loop back to the start of this ayah
+            console.log(
+              "🔄 Looping ayah back from",
+              time.toFixed(2),
+              "to",
+              loopSegment.start.toFixed(2)
+            );
+            audioRef.current.currentTime = loopSegment.start;
+            if (audioRef.current.paused) {
+              audioRef.current.play();
+            }
+            return; // Exit early after looping
+          }
+        }
+
         const currentSegment = project.segments.find(
-          (seg) => time >= seg.start && time < seg.end
+          (seg: { start: number; end: number }) =>
+            time >= seg.start && time < seg.end
         );
 
         if (currentSegment) {
@@ -203,25 +252,25 @@ export default function QuranReaderPage() {
           if (ayahNums.length > 0) {
             setCurrentAyahNumbers(ayahNums);
 
-            // Auto-scroll to active ayah
+            // Auto-scroll to active ayah ONLY if it's not in view
             const firstAyahNum = ayahNums[0];
             const ayahIndex = ayahs.findIndex(
               (a) => a.numberInSurah === firstAyahNum
             );
             if (ayahIndex >= 0 && ayahRefs.current[ayahIndex]) {
-              ayahRefs.current[ayahIndex]?.scrollIntoView({
-                behavior: "smooth",
-                block: "center",
-              });
-            }
+              const element = ayahRefs.current[ayahIndex];
+              if (element) {
+                // Check if element is in viewport
+                const rect = element.getBoundingClientRect();
+                const isInView =
+                  rect.top >= 0 && rect.bottom <= window.innerHeight;
 
-            // Ayah looping logic
-            if (isLoopingAyah && currentSegment) {
-              const timeUntilEnd = currentSegment.end - time;
-              if (timeUntilEnd < 0.15) {
-                audioRef.current.currentTime = currentSegment.start;
-                if (audioRef.current.paused) {
-                  audioRef.current.play();
+                // Only scroll if element is not in view
+                if (!isInView) {
+                  element.scrollIntoView({
+                    behavior: "smooth",
+                    block: "center",
+                  });
                 }
               }
             }
@@ -255,8 +304,15 @@ export default function QuranReaderPage() {
   const handleEnded = () => {
     if (isLoopingAyah && project?.segments && currentAyahNumbers.length > 0) {
       const currentSegment = project.segments.find(
-        (seg) =>
-          seg.ayahNumbers?.some((num) => currentAyahNumbers.includes(num)) ||
+        (seg: {
+          ayahNumbers?: number[];
+          ayahNumber?: number;
+          start: number;
+          end: number;
+        }) =>
+          seg.ayahNumbers?.some((num: number) =>
+            currentAyahNumbers.includes(num)
+          ) ||
           (seg.ayahNumber !== undefined &&
             currentAyahNumbers.includes(seg.ayahNumber))
       );
@@ -270,25 +326,50 @@ export default function QuranReaderPage() {
   };
 
   const handleToggleLoop = () => {
-    setIsLooping(!isLooping);
+    const newLooping = !isLooping;
+    setIsLooping(newLooping);
+    // If enabling full surah loop, disable ayah loop
+    if (newLooping && isLoopingAyah) {
+      setIsLoopingAyah(false);
+    }
   };
 
   const handleToggleLoopAyah = () => {
-    setIsLoopingAyah(!isLoopingAyah);
+    const newLoopingAyah = !isLoopingAyah;
+    setIsLoopingAyah(newLoopingAyah);
+    console.log("🔄 Ayah Loop:", newLoopingAyah ? "ENABLED" : "DISABLED");
+    // If enabling ayah loop, disable full surah loop
+    if (newLoopingAyah && isLooping) {
+      setIsLooping(false);
+    }
   };
 
   const handleNextAyah = () => {
     if (!project?.segments || currentAyahNumbers.length === 0) return;
 
     const currentIndex = project.segments.findIndex(
-      (seg) =>
-        seg.ayahNumbers?.some((num) => currentAyahNumbers.includes(num)) ||
+      (seg: { ayahNumbers?: number[]; ayahNumber?: number }) =>
+        seg.ayahNumbers?.some((num: number) =>
+          currentAyahNumbers.includes(num)
+        ) ||
         (seg.ayahNumber !== undefined &&
           currentAyahNumbers.includes(seg.ayahNumber))
     );
 
     if (currentIndex < project.segments.length - 1 && audioRef.current) {
       const nextSegment = project.segments[currentIndex + 1];
+
+      // Update currentAyahNumbers for the next ayah (important for looping)
+      let ayahNums: number[] = [];
+      if (nextSegment.ayahNumbers && nextSegment.ayahNumbers.length > 0) {
+        ayahNums = nextSegment.ayahNumbers;
+      } else if (nextSegment.ayahNumber !== undefined) {
+        ayahNums = [nextSegment.ayahNumber];
+      }
+      if (ayahNums.length > 0) {
+        setCurrentAyahNumbers(ayahNums);
+      }
+
       audioRef.current.currentTime = nextSegment.start;
       if (!isPlaying) {
         audioRef.current.play();
@@ -301,20 +382,53 @@ export default function QuranReaderPage() {
     if (!project?.segments || currentAyahNumbers.length === 0) return;
 
     const currentIndex = project.segments.findIndex(
-      (seg) =>
-        seg.ayahNumbers?.some((num) => currentAyahNumbers.includes(num)) ||
+      (seg: { ayahNumbers?: number[]; ayahNumber?: number }) =>
+        seg.ayahNumbers?.some((num: number) =>
+          currentAyahNumbers.includes(num)
+        ) ||
         (seg.ayahNumber !== undefined &&
           currentAyahNumbers.includes(seg.ayahNumber))
     );
 
     if (currentIndex > 0 && audioRef.current) {
       const prevSegment = project.segments[currentIndex - 1];
+
+      // Update currentAyahNumbers for the previous ayah (important for looping)
+      let ayahNums: number[] = [];
+      if (prevSegment.ayahNumbers && prevSegment.ayahNumbers.length > 0) {
+        ayahNums = prevSegment.ayahNumbers;
+      } else if (prevSegment.ayahNumber !== undefined) {
+        ayahNums = [prevSegment.ayahNumber];
+      }
+      if (ayahNums.length > 0) {
+        setCurrentAyahNumbers(ayahNums);
+      }
+
       audioRef.current.currentTime = prevSegment.start;
       if (!isPlaying) {
         audioRef.current.play();
         setIsPlaying(true);
       }
     }
+  };
+
+  const handleVolumeChange = (newVolume: number) => {
+    setVolume(newVolume);
+    if (audioRef.current) {
+      try {
+        audioRef.current.volume = newVolume;
+        console.log("🔊 Volume changed to:", newVolume);
+      } catch (error) {
+        console.warn("⚠️ Volume control not supported on this device:", error);
+      }
+    }
+  };
+
+  const getVolumeIcon = () => {
+    if (volume === 0) return FiVolumeX;
+    if (volume < 0.5) return FiVolume;
+    if (volume < 0.8) return FiVolume1;
+    return FiVolume2;
   };
 
   const handleSpeedChange = (speed: number) => {
@@ -328,11 +442,30 @@ export default function QuranReaderPage() {
     if (!project?.segments || !audioRef.current) return;
 
     const segment = project.segments.find(
-      (seg) =>
+      (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
         seg.ayahNumbers?.includes(ayahNumber) || seg.ayahNumber === ayahNumber
     );
 
     if (segment) {
+      // Update currentAyahNumbers to the newly selected ayah
+      // This is crucial for ayah looping to work with the new selection
+      let ayahNums: number[] = [];
+      if (segment.ayahNumbers && segment.ayahNumbers.length > 0) {
+        ayahNums = segment.ayahNumbers;
+      } else if (segment.ayahNumber !== undefined) {
+        ayahNums = [segment.ayahNumber];
+      }
+
+      if (ayahNums.length > 0) {
+        setCurrentAyahNumbers(ayahNums);
+        console.log(
+          "👆 Clicked ayah:",
+          ayahNums,
+          "- Loop active:",
+          isLoopingAyah
+        );
+      }
+
       audioRef.current.currentTime = segment.start;
       if (!isPlaying) {
         audioRef.current.play();
@@ -340,6 +473,26 @@ export default function QuranReaderPage() {
       }
     }
   };
+
+  // Click outside to close volume slider
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        volumeRef.current &&
+        !volumeRef.current.contains(event.target as Node)
+      ) {
+        setShowVolumeSlider(false);
+      }
+    };
+
+    if (showVolumeSlider) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [showVolumeSlider]);
 
   // Spacebar play/pause
   useEffect(() => {
@@ -357,16 +510,6 @@ export default function QuranReaderPage() {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [handlePlayPause]);
 
-  // Format time as 00h:00m:00s
-  const formatTime = (time: number) => {
-    const hours = Math.floor(time / 3600);
-    const minutes = Math.floor((time % 3600) / 60);
-    const seconds = Math.floor(time % 60);
-    return `${hours.toString().padStart(2, "0")}h:${minutes
-      .toString()
-      .padStart(2, "0")}m:${seconds.toString().padStart(2, "0")}s`;
-  };
-
   if (!project) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -376,70 +519,100 @@ export default function QuranReaderPage() {
   }
 
   const surahInfo = SURAHS.find((s) => s.number === project.surahNumber);
-  const speedOptions = [0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5];
+  const speedOptions = [
+    0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2,
+  ];
 
   return (
     <div className="min-h-screen bg-background pb-32">
       {/* Header */}
       <div className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold">{project.name}</h1>
-              <p className="text-sm text-muted-foreground">
+        <div className="container mx-auto px-4 py-3 sm:py-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg sm:text-2xl font-bold truncate">
+                {project.name}
+              </h1>
+              <p className="text-xs sm:text-sm text-muted-foreground truncate">
                 {surahInfo
                   ? `Surah ${surahInfo.number}: ${surahInfo.transliteration} (${surahInfo.translation})`
                   : `Surah ${project.surahNumber}`}
               </p>
             </div>
-            <div className="flex gap-2">
+
+            {/* Mobile: Stack controls vertically */}
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
               {/* View Mode Toggle */}
-              <Button
-                variant={viewMode === "list" ? "default" : "outline"}
-                className="cursor-pointer gap-2"
-                onClick={() => setViewMode("list")}
-              >
-                <FiList /> List
-              </Button>
-              <Button
-                variant={viewMode === "mushaf" ? "default" : "outline"}
-                className="cursor-pointer gap-2"
-                onClick={() => setViewMode("mushaf")}
-              >
-                <FiBook /> Mushaf
-              </Button>
+              <div className="flex gap-1 sm:gap-2">
+                <Link href="/library">
+                  <Button
+                    variant="outline"
+                    className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                  >
+                    <FiArrowLeft className="h-3 w-3 sm:h-4 sm:w-4" />
+                    <span>Library</span>
+                  </Button>
+                </Link>
 
-              {/* Translation Toggle (only in list view) */}
-              {viewMode === "list" && (
+                {/* Divider */}
+                <div className="w-px bg-border mx-1 sm:mx-2 hidden sm:block" />
+
                 <Button
-                  variant={showTranslation ? "default" : "outline"}
-                  className="cursor-pointer gap-2"
-                  onClick={() => setShowTranslation(!showTranslation)}
+                  variant={viewMode === "list" ? "default" : "outline"}
+                  className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                  onClick={() => setViewMode("list")}
                 >
-                  {showTranslation ? "Hide" : "Show"} Translation
+                  <FiList className="h-3 w-3 sm:h-4 sm:w-4" />
+                  <span>List</span>
                 </Button>
-              )}
+                <Button
+                  variant={viewMode === "mushaf" ? "default" : "outline"}
+                  className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                  onClick={() => setViewMode("mushaf")}
+                >
+                  <FiBook className="h-3 w-3 sm:h-4 sm:w-4" />
+                  <span>Mushaf</span>
+                </Button>
 
-              <div className="w-px bg-border mx-2" />
+                {/* Divider */}
+                <div className="w-px bg-border mx-1 sm:mx-2 hidden sm:block" />
 
-              <Link href={`/editor/${project.id}`}>
-                <Button variant="outline" className="cursor-pointer gap-2">
-                  <FiEdit /> Edit
-                </Button>
-              </Link>
-              <Link href="/library">
-                <Button variant="outline" className="cursor-pointer gap-2">
-                  <FiArrowLeft /> Library
-                </Button>
-              </Link>
+                {/* Translation Toggle (only in list view) */}
+                {viewMode === "list" && (
+                  <Button
+                    variant={showTranslation ? "default" : "outline"}
+                    className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                    onClick={() => setShowTranslation(!showTranslation)}
+                  >
+                    <span>{showTranslation ? "Hide" : "Show"} Translation</span>
+                  </Button>
+                )}
+              </div>
+
+              {/* Action buttons */}
+              <div className=" gap-1 sm:gap-2 hidden md:flex">
+                <Link href={`/editor/${project.id}`}>
+                  <Button
+                    variant="outline"
+                    className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                  >
+                    <FiEdit className="h-3 w-3 sm:h-4 sm:w-4" />
+                    <span>Edit</span>
+                  </Button>
+                </Link>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
       {/* Quran Text */}
-      <div className="container mx-auto px-4 py-8">
-        <div className="max-w-4xl mx-auto">
+      <div className="w-full px-2 sm:px-4 py-8">
+        <div
+          className={
+            viewMode === "mushaf" ? "max-w-full mx-auto" : "max-w-4xl mx-auto"
+          }
+        >
           {/* Surah Header */}
           <div className="text-center mb-8 pb-8 border-b">
             <h2 className={`text-4xl font-bold mb-2 ${amiri.className}`}>
@@ -450,7 +623,7 @@ export default function QuranReaderPage() {
             </p>
             {project.surahNumber !== 1 && project.surahNumber !== 9 && (
               <p
-                className={`text-3xl mt-6 ${amiri.className}`}
+                className={`text-xl sm:text-2xl md:text-3xl mt-6 ${amiri.className}`}
                 dir="rtl"
                 lang="ar"
               >
@@ -480,27 +653,18 @@ export default function QuranReaderPage() {
                   `}
                     onClick={() => handleAyahClick(ayah.numberInSurah)}
                   >
-                    <div className="flex items-start gap-4 px-2">
-                      <div
-                        className={`
-                        shrink-0 w-10 h-10 rounded-full 
-                        flex items-center justify-center
-                        transition-colors
-                        ${
-                          isActive
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted text-muted-foreground"
-                        }
-                      `}
-                      >
-                        <span className="text-sm font-semibold">
-                          {toArabicNumerals(ayah.numberInSurah)}
+                    <div className="flex items-start gap-3 px-2">
+                      <div className="flex flex-col items-center gap-1">
+                        <span className="text-xs text-muted-foreground opacity-60">
+                          {project.surahNumber}:{ayah.numberInSurah}
                         </span>
                       </div>
                       <div className="flex-1 space-y-3">
                         <p
                           className={`
-                          text-right text-2xl leading-loose ${amiri.className}
+                          text-right text-2xl md:text-2xl lg:text-3xl leading-[2.3] ${
+                            amiri.className
+                          }
                           ${isActive ? "text-primary font-semibold" : ""}
                         `}
                           dir="rtl"
@@ -511,7 +675,7 @@ export default function QuranReaderPage() {
                         {showTranslation && ayah.translation && (
                           <p
                             className={`
-                            text-left text-base leading-relaxed text-muted-foreground
+                            text-left text-sm md:text-base text-muted-foreground
                             ${isActive ? "text-primary/80" : ""}
                           `}
                           >
@@ -578,18 +742,29 @@ export default function QuranReaderPage() {
                             <div
                               key={`line-${lineNum}`}
                               className={`
-                                text-center px-4 py-2
+                                text-center px-2 sm:px-4 py-1
                                 ${amiri.className}
                               `}
                               dir="rtl"
                               lang="ar"
                               style={{
                                 width: "100%",
-                                maxWidth: "800px",
+                                maxWidth: "100%",
                                 margin: "0 auto",
+                                display: "flex",
+                                justifyContent: "center",
+                                alignItems: "center",
                               }}
                             >
-                              <div className="text-3xl leading-relaxed">
+                              <div
+                                className="text-lg sm:text-2xl md:text-3xl lg:text-4xl mushaf-line"
+                                style={{
+                                  whiteSpace: "nowrap",
+                                  overflow: "visible",
+                                  lineHeight: "1.4",
+                                  padding: "0.25rem",
+                                }}
+                              >
                                 {(() => {
                                   // Collect all words for this line grouped by verse
                                   const verseWordGroups: Record<
@@ -655,6 +830,16 @@ export default function QuranReaderPage() {
                                       return (
                                         <span
                                           key={`verse-${verseNum}`}
+                                          ref={(el) => {
+                                            // Add ref for this verse so we can scroll to it
+                                            const ayahIndex = ayahs.findIndex(
+                                              (a) =>
+                                                a.numberInSurah === verseNumber
+                                            );
+                                            if (ayahIndex >= 0) {
+                                              ayahRefs.current[ayahIndex] = el;
+                                            }
+                                          }}
                                           onClick={() =>
                                             handleAyahClick(verseNumber)
                                           }
@@ -670,11 +855,12 @@ export default function QuranReaderPage() {
                                           {words.map((item, idx) => (
                                             <span
                                               key={`${item.word.id}-${idx}`}
+                                              className="inline"
                                             >
                                               {item.word.text_uthmani}{" "}
                                               {item.isLastWordOfVerse && (
-                                                <span className="text-2xl mx-1">
-                                                  {getVerseMarker(verseNumber)}
+                                                <span className="inline text-xs sm:text-base md:text-lg lg:text-xl">
+                                                  {getVerseMarker(verseNumber)}{" "}
                                                 </span>
                                               )}
                                             </span>
@@ -699,28 +885,24 @@ export default function QuranReaderPage() {
 
       {/* Fixed Audio Player at Bottom */}
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-background border-t shadow-lg">
-        <div className="w-full px-6 py-4">
+        <div className="w-full px-2 sm:px-4 md:px-6 py-2 sm:py-3">
           {isFetchingAudio ? (
-            <div className="flex items-center justify-center gap-3 py-2">
-              <div className="animate-spin h-5 w-5 border-2 border-primary border-t-transparent rounded-full"></div>
-              <span className="text-sm text-muted-foreground">
-                Fetching audio from cloud storage...
+            <div className="flex items-center justify-center gap-2 py-1 sm:py-2">
+              <div className="animate-spin h-4 w-4 sm:h-5 sm:w-5 border-2 border-primary border-t-transparent rounded-full"></div>
+              <span className="text-xs sm:text-sm text-muted-foreground">
+                Fetching audio...
               </span>
             </div>
           ) : !audioFile ? (
-            <div className="flex items-center justify-center py-2">
-              <p className="text-sm text-muted-foreground">
-                <FiInfo className="inline mr-1" /> No audio file available for
-                this project
+            <div className="flex items-center justify-center py-1 sm:py-2">
+              <p className="text-xs sm:text-sm text-muted-foreground">
+                <FiInfo className="inline mr-1" /> No audio available
               </p>
             </div>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-1.5 sm:space-y-2">
               {/* Progress Bar */}
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-muted-foreground min-w-[45px]">
-                  {formatTime(currentTime)}
-                </span>
+              <div className="flex items-center gap-2 sm:gap-3">
                 <input
                   type="range"
                   min="0"
@@ -731,95 +913,118 @@ export default function QuranReaderPage() {
                       audioRef.current.currentTime = parseFloat(e.target.value);
                     }
                   }}
-                  className="flex-1 cursor-pointer"
+                  className="flex-1 cursor-pointer h-2 bg-muted rounded-lg appearance-none"
                 />
-                <span className="text-xs text-muted-foreground min-w-[45px] text-right">
-                  {formatTime(duration)}
-                </span>
               </div>
 
               {/* Controls */}
-              <div className="flex items-center justify-between gap-4">
-                {/* Left: Loop Options & Current Ayah */}
-                <div className="flex items-center gap-2 flex-1">
+              <div className="flex items-center justify-between gap-1 sm:gap-2 md:gap-4">
+                {/* Left: Volume & Loop Controls */}
+                <div className="flex items-center gap-0.5 sm:gap-1 md:gap-2">
+                  {/* Volume Control - Hidden on iOS/iPadOS where it's not supported */}
+                  {!isIOS && (
+                    <div className="relative" ref={volumeRef}>
+                      <Button
+                        onClick={() => setShowVolumeSlider(!showVolumeSlider)}
+                        variant="outline"
+                        size="icon"
+                        className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
+                        title={`Volume: ${Math.round(volume * 100)}%`}
+                      >
+                        {(() => {
+                          const VolumeIcon = getVolumeIcon();
+                          return (
+                            <VolumeIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                          );
+                        })()}
+                      </Button>
+
+                      {/* Vertical Volume Slider Popup */}
+                      {showVolumeSlider && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-background border rounded-lg shadow-lg p-2 flex items-center justify-center z-10">
+                          <div className="h-24 w-8 flex items-center justify-center">
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.01"
+                              value={volume}
+                              onChange={(e) =>
+                                handleVolumeChange(parseFloat(e.target.value))
+                              }
+                              className="w-24 cursor-pointer accent-primary -rotate-90"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <Button
                     onClick={handleToggleLoop}
                     variant={isLooping ? "default" : "outline"}
                     size="icon"
-                    className="cursor-pointer"
+                    className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
                     title="Repeat surah"
                   >
-                    <FiRepeat className={isLooping ? "" : "opacity-50"} />
+                    <FiRepeat className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </Button>
                   <Button
                     onClick={handleToggleLoopAyah}
                     variant={isLoopingAyah ? "default" : "outline"}
                     size="icon"
-                    className="cursor-pointer"
+                    className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
                     title="Repeat current ayah"
                     disabled={currentAyahNumbers.length === 0}
                   >
-                    <FiRotateCw className={isLoopingAyah ? "" : "opacity-50"} />
+                    <FiRotateCw className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </Button>
-                  {currentAyahNumbers.length > 0 && (
-                    <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-primary/10 rounded-full">
-                      <span className="text-base font-medium">
-                        {currentAyahNumbers
-                          .map((num) => getVerseMarker(num))
-                          .join(" ")}
-                      </span>
-                    </div>
-                  )}
                 </div>
 
                 {/* Center: Playback Controls */}
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1 sm:gap-1.5 md:gap-2">
                   <Button
                     onClick={handlePrevAyah}
                     variant="outline"
                     size="icon"
-                    className="cursor-pointer"
+                    className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
                     disabled={currentAyahNumbers.length === 0}
                   >
-                    <FiSkipBack />
+                    <FiSkipBack className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </Button>
                   <Button
                     onClick={handlePlayPause}
                     size="icon"
-                    className="cursor-pointer h-12 w-12"
+                    className="cursor-pointer h-10 w-10 sm:h-11 sm:w-11 md:h-12 md:w-12"
                   >
-                    {isPlaying ? <FiPause size={20} /> : <FiPlay size={20} />}
+                    {isPlaying ? (
+                      <FiPause className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+                    ) : (
+                      <FiPlay className="h-4.5 w-4.5 sm:h-5 sm:w-5" />
+                    )}
                   </Button>
                   <Button
                     onClick={handleNextAyah}
                     variant="outline"
                     size="icon"
-                    className="cursor-pointer"
+                    className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
                     disabled={currentAyahNumbers.length === 0}
                   >
-                    <FiSkipForward />
+                    <FiSkipForward className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </Button>
                 </div>
 
-                {/* Center-Right: Time Display */}
-                <div className="flex items-center gap-2">
-                  <div className="text-sm font-mono">
-                    {formatTime(currentTime)} / {formatTime(duration)}
-                  </div>
-                  <div className="text-xs text-muted-foreground font-mono">
-                    ({currentTime.toFixed(2)}s / {duration.toFixed(2)}s)
-                  </div>
-                </div>
-
                 {/* Right: Speed Control */}
-                <div className="flex items-center gap-2 flex-1 justify-end">
-                  <span className="text-xs text-muted-foreground">Speed:</span>
+                <div className="flex items-center gap-1 sm:gap-1.5 md:gap-2">
+                  <span className="text-xs text-muted-foreground hidden md:inline">
+                    Speed:
+                  </span>
                   <select
                     value={playbackRate}
                     onChange={(e) =>
                       handleSpeedChange(parseFloat(e.target.value))
                     }
-                    className="px-3 py-1.5 text-sm border rounded-md bg-background cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="px-1.5 py-0.5 sm:px-2 sm:py-1 text-xs border rounded bg-background cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary"
                   >
                     {speedOptions.map((speed) => (
                       <option key={speed} value={speed}>

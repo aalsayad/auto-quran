@@ -40,7 +40,7 @@ async function fetchAllVerses() {
   console.log(
     "\n📜 Fetching all verses with English translation (1-114 surahs)..."
   );
-  const allVerses: any = {};
+  const allVerses: Record<number, unknown[]> = {};
 
   for (let surahNum = 1; surahNum <= 114; surahNum++) {
     console.log(`  Fetching Surah ${surahNum}...`);
@@ -56,12 +56,14 @@ async function fetchAllVerses() {
     );
 
     // Merge translations into verses
-    const verses = arabicData.verses.map((verse: any, index: number) => ({
-      ...verse,
-      translations: translationData.translations[index]
-        ? [translationData.translations[index]]
-        : [],
-    }));
+    const verses = arabicData.verses.map(
+      (verse: Record<string, unknown>, index: number) => ({
+        ...verse,
+        translations: translationData.translations[index]
+          ? [translationData.translations[index]]
+          : [],
+      })
+    );
 
     allVerses[surahNum] = verses;
     await delay(300); // Rate limiting (2 requests per surah)
@@ -73,7 +75,7 @@ async function fetchAllVerses() {
 
 async function fetchAllMushafPages() {
   console.log("\n📄 Fetching all 604 Mushaf pages with word-by-word data...");
-  const allPages: any = {};
+  const allPages: Record<number, unknown> = {};
 
   for (let pageNum = 1; pageNum <= 604; pageNum++) {
     if (pageNum % 50 === 0) {

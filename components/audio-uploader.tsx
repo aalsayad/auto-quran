@@ -58,6 +58,7 @@ interface Segment {
   text: string;
   ayahNumber?: number; // Manual ayah assignment (can be 0 for bismillah)
   ayahNumbers?: number[]; // For merged segments containing multiple ayahs
+  confidence: number; // Confidence score for the segment mapping
 }
 
 // Constants for audio chunking (removed - now calculated dynamically based on file size)
@@ -269,7 +270,7 @@ export default function AudioUploader() {
         setSelectedSurah(project.surahNumber);
         setSegments(project.segments);
         setOriginalSegments(project.segments);
-        setAyahTexts(project.ayahTexts);
+        setAyahTexts(project.ayahTexts || []);
         if (project.silenceThreshold)
           setSilenceThreshold(project.silenceThreshold);
         if (project.minSilenceDuration)
@@ -291,7 +292,10 @@ export default function AudioUploader() {
           console.log("🔄 [Project] Loading audio file from S3...");
 
           // Fetch the audio file from S3 and set it as audioFile
-          loadAudioFromS3(project.audioUrl, project.fileName);
+          loadAudioFromS3(
+            project.audioUrl,
+            project.fileName || project.audioFileName || "audio.mp3"
+          );
         }
       } else {
         console.log("Project not found for ID:", projectId);
@@ -435,6 +439,9 @@ export default function AudioUploader() {
         dateCreated: currentProjectId
           ? getProject(currentProjectId)?.dateCreated ||
             new Date().toISOString()
+          : new Date().toISOString(),
+        createdAt: currentProjectId
+          ? getProject(currentProjectId)?.createdAt || new Date().toISOString()
           : new Date().toISOString(),
         lastModified: new Date().toISOString(),
         segments,
@@ -1199,22 +1206,26 @@ export default function AudioUploader() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="w-full max-w-4xl mx-auto">
         <Card className="transition-all duration-200 hover:border-primary/30">
           <CardHeader>
             <div className="flex items-start justify-between">
               <div className="flex-1">
-                <CardTitle>
-                  {currentProjectId && segments.length > 0
-                    ? "📂 Loaded Project"
-                    : "Upload Quran Surah"}
+                <CardTitle className="text-2xl">
+                  {projectName || "New Project"}
                 </CardTitle>
                 <CardDescription>
-                  {currentProjectId && segments.length > 0
-                    ? audioFile && audioUrl
-                      ? `Project: ${projectName} • Audio loaded from cloud storage`
-                      : `Project: ${projectName} • Upload audio file to enable downloads`
-                    : "Upload an MP3 file containing a Quran surah to split into individual ayahs"}
+                  {selectedSurah && (
+                    <span>
+                      {
+                        SURAHS.find((s) => s.number === selectedSurah)
+                          ?.transliteration
+                      }{" "}
+                      ({SURAHS.find((s) => s.number === selectedSurah)?.name}) •{" "}
+                      {SURAHS.find((s) => s.number === selectedSurah)?.ayahs}{" "}
+                      ayahs
+                    </span>
+                  )}
                 </CardDescription>
               </div>
               {currentProjectId && (
@@ -1231,36 +1242,41 @@ export default function AudioUploader() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="audio-file" className="cursor-pointer">
-                MP3 File
-              </Label>
-              <input
-                ref={fileInputRef}
-                id="audio-file"
-                type="file"
-                accept="audio/mpeg"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-
-              {isFetchingAudio ? (
-                <div className="w-full p-3 border rounded-md bg-muted/50 flex items-center gap-2 text-sm">
-                  <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full"></div>
-                  Fetching file from cloud storage...
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleButtonClick}
-                  className="w-full cursor-pointer transition-all duration-200 hover:bg-accent"
-                  disabled={isUploading}
+            {/* Audio Preview - Right below project name */}
+            {audioFile && audioUrl && (
+              <div className="space-y-2">
+                <audio
+                  controls
+                  src={audioUrl}
+                  className="w-full h-10"
+                  preload="metadata"
                 >
-                  {audioFile ? "Change File" : "Choose MP3 File"}
-                </Button>
-              )}
-            </div>
+                  Your browser does not support the audio element.
+                </audio>
+              </div>
+            )}
+
+            {/* File Info - Read Only */}
+            {audioFile && (
+              <div className="space-y-3">
+                <Label className="text-sm font-medium">MP3 File</Label>
+                <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md">
+                  <span className="font-medium">{audioFile.name}</span>
+                </div>
+                {audioUrl && (
+                  <div className="text-sm text-green-600 dark:text-green-400 p-3 bg-green-50 dark:bg-green-950 rounded-md flex items-center gap-2">
+                    <FiCheckCircle /> Uploaded to cloud storage
+                  </div>
+                )}
+              </div>
+            )}
+
+            {isFetchingAudio && (
+              <div className="w-full p-3 border rounded-md bg-muted/50 flex items-center gap-2 text-sm">
+                <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full"></div>
+                Fetching file from cloud storage...
+              </div>
+            )}
 
             {isUploading && (
               <div className="text-sm text-blue-600 dark:text-blue-400 p-3 bg-blue-50 dark:bg-blue-950 rounded-md flex items-center gap-2">
@@ -1269,286 +1285,195 @@ export default function AudioUploader() {
               </div>
             )}
 
-            {audioFile && (
+            {audioFile && selectedSurah && selectedSurahInfo && (
               <>
-                <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md">
-                  Selected:{" "}
-                  <span className="font-medium">{audioFile.name}</span>
-                </div>
-
-                {audioUrl && (
-                  <div className="text-sm text-green-600 dark:text-green-400 p-3 bg-green-50 dark:bg-green-950 rounded-md flex items-center gap-2">
-                    <FiCheckCircle /> Uploaded to cloud storage
-                  </div>
-                )}
-
-                {detectedSurah && (
-                  <div className="text-sm text-green-600 dark:text-green-400 p-3 bg-green-50 dark:bg-green-950 rounded-md flex items-center gap-2">
-                    <FiCheckCircle /> Auto-detected: Surah {detectedSurah}
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <Label htmlFor="surah-select">Select Surah</Label>
-                  <Select
-                    value={selectedSurah?.toString()}
-                    onValueChange={(value) => setSelectedSurah(parseInt(value))}
-                  >
-                    <SelectTrigger id="surah-select" className="cursor-pointer">
-                      <SelectValue placeholder="Select a surah" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {SURAHS.map((surah) => (
-                        <SelectItem
-                          key={surah.number}
-                          value={surah.number.toString()}
-                          className="cursor-pointer"
-                        >
-                          {surah.number}. {surah.transliteration} ({surah.name})
-                          - {surah.ayahs} ayahs
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {selectedSurahInfo && (
+                {/* Detection options */}
+                {segments.length === 0 && (
                   <>
-                    <div className="text-sm p-3 bg-primary/10 rounded-md">
-                      <div className="font-semibold">
-                        Surah {selectedSurahInfo.number}:{" "}
-                        {selectedSurahInfo.transliteration}
-                      </div>
-                      <div className="text-muted-foreground">
-                        {selectedSurahInfo.translation} •{" "}
-                        {selectedSurahInfo.ayahs} ayahs
-                      </div>
-                    </div>
+                    <div className="space-y-3">
+                      <Button
+                        onClick={() => handleTranscribe(false)}
+                        disabled={isTranscribing || !selectedSurah}
+                        variant="outline"
+                        className="cursor-pointer transition-all duration-200 hover:bg-accent w-full"
+                        size="lg"
+                      >
+                        {isTranscribing
+                          ? "AI Mapping..."
+                          : whisperTranscription
+                          ? "Re-map with AI (Cheap)"
+                          : "Whisper + AI Detection"}
+                      </Button>
 
-                    {/* Detection options */}
-                    {segments.length === 0 && (
-                      <>
-                        <div className="space-y-2">
-                          <Label className="text-sm font-medium">
-                            Detection Method
-                          </Label>
-                          <div className="grid grid-cols-2 gap-2">
-                            <Button
-                              onClick={handleSilenceDetection}
-                              disabled={isDetectingSilence}
-                              variant="outline"
-                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                            >
-                              {isDetectingSilence
-                                ? "Analyzing..."
-                                : "Detect by Silence"}
-                            </Button>
-                            <Button
-                              onClick={() => handleTranscribe(false)}
-                              disabled={isTranscribing || !selectedSurah}
-                              variant="outline"
-                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                            >
-                              {isTranscribing
-                                ? "AI Mapping..."
-                                : whisperTranscription
-                                ? "Re-map with AI (Cheap)"
-                                : "Whisper + AI Detection"}
-                            </Button>
-
-                            {/* Progress indicator */}
-                            {isTranscribing &&
-                              transcriptionProgress.message && (
-                                <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-950 rounded-md">
-                                  <div className="flex items-center justify-between text-sm">
-                                    <span className="font-medium text-blue-700 dark:text-blue-300">
-                                      {transcriptionProgress.message}
-                                    </span>
-                                    {transcriptionProgress.total > 0 && (
-                                      <span className="text-blue-600 dark:text-blue-400">
-                                        {transcriptionProgress.current}/
-                                        {transcriptionProgress.total}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {transcriptionProgress.percentage > 0 && (
-                                    <div className="w-full bg-blue-200 dark:bg-blue-900 rounded-full h-2">
-                                      <div
-                                        className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full transition-all duration-300"
-                                        style={{
-                                          width: `${transcriptionProgress.percentage}%`,
-                                        }}
-                                      ></div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                            {whisperTranscription && !isTranscribing && (
-                              <p className="text-xs text-green-600 flex items-center gap-1">
-                                <FiCheckCircle size={12} />
-                                Whisper cached in localStorage - only GPT-4o
-                                mapping cost
-                              </p>
+                      {/* Progress indicator */}
+                      {isTranscribing && transcriptionProgress.message && (
+                        <div className="space-y-2 p-3 bg-blue-50 dark:bg-blue-950 rounded-md">
+                          <div className="flex items-center justify-between text-sm">
+                            <span className="font-medium text-blue-700 dark:text-blue-300">
+                              {transcriptionProgress.message}
+                            </span>
+                            {transcriptionProgress.total > 0 && (
+                              <span className="text-blue-600 dark:text-blue-400">
+                                {transcriptionProgress.current}/
+                                {transcriptionProgress.total}
+                              </span>
                             )}
                           </div>
-                          <p className="text-xs text-muted-foreground flex items-start gap-1">
-                            <FiInfo size={12} className="mt-0.5 shrink-0" />
-                            <span>
-                              <strong>Silence Detection:</strong> Fast & offline
-                              <br />
-                              <strong>Whisper + AI:</strong> Transcribes once
-                              (Whisper), cached to localStorage. Re-mapping only
-                              costs AI tokens (cheap!)
-                            </span>
-                          </p>
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label className="text-sm font-medium">
-                            Silence Detection Settings
-                          </Label>
-                          <div className="space-y-2">
-                            <div>
-                              <Label
-                                htmlFor="min-silence"
-                                className="text-xs text-muted-foreground"
-                              >
-                                Min Silence Duration:{" "}
-                                {minSilenceDuration.toFixed(2)}s
-                              </Label>
-                              <input
-                                id="min-silence"
-                                type="range"
-                                min="0.1"
-                                max="1"
-                                step="0.05"
-                                value={minSilenceDuration}
-                                onChange={(e) =>
-                                  setMinSilenceDuration(
-                                    parseFloat(e.target.value)
-                                  )
-                                }
-                                className="w-full cursor-pointer"
-                              />
-                            </div>
-                            <div>
-                              <Label
-                                htmlFor="silence-threshold"
-                                className="text-xs text-muted-foreground"
-                              >
-                                Sensitivity: {silenceThreshold.toFixed(3)}
-                              </Label>
-                              <input
-                                id="silence-threshold"
-                                type="range"
-                                min="0.001"
-                                max="0.05"
-                                step="0.001"
-                                value={silenceThreshold}
-                                onChange={(e) =>
-                                  setSilenceThreshold(
-                                    parseFloat(e.target.value)
-                                  )
-                                }
-                                className="w-full cursor-pointer"
-                              />
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <p className="text-xs text-muted-foreground">
-                                Not detecting enough? Increase sensitivity →
-                              </p>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => {
-                                  setSilenceThreshold(0.04);
-                                  setMinSilenceDuration(0.2);
+                          {transcriptionProgress.percentage > 0 && (
+                            <div className="w-full bg-blue-200 dark:bg-blue-900 rounded-full h-2">
+                              <div
+                                className="bg-blue-600 dark:bg-blue-400 h-2 rounded-full transition-all duration-300"
+                                style={{
+                                  width: `${transcriptionProgress.percentage}%`,
                                 }}
-                                className="text-xs h-6 cursor-pointer"
-                              >
-                                Reset
-                              </Button>
+                              ></div>
                             </div>
-                          </div>
+                          )}
                         </div>
-                      </>
-                    )}
+                      )}
 
-                    {/* Re-run detection options when segments exist */}
-                    {segments.length > 0 && (
-                      <>
-                        <div className="space-y-2">
-                          <Label className="text-sm font-medium">
-                            Re-run Detection
-                          </Label>
-                          <div className="grid grid-cols-3 gap-2">
-                            <Button
-                              onClick={handleSilenceDetection}
-                              disabled={isDetectingSilence}
-                              variant="outline"
-                              size="sm"
-                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                            >
-                              {isDetectingSilence
-                                ? "Analyzing..."
-                                : "Re-detect by Silence"}
-                            </Button>
-                            <Button
-                              onClick={handleFreshWhisperTranscription}
-                              disabled={isTranscribing || !selectedSurah}
-                              variant="outline"
-                              size="sm"
-                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                            >
-                              {isTranscribing
-                                ? "Transcribing..."
-                                : "Re-transcribe with Whisper"}
-                            </Button>
-                            <Button
-                              onClick={() => handleTranscribe(false)}
-                              disabled={isTranscribing || !selectedSurah}
-                              variant="outline"
-                              size="sm"
-                              className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                            >
-                              {isTranscribing
-                                ? "AI Mapping..."
-                                : whisperTranscription
-                                ? "Re-map with AI (Cheap)"
-                                : "Re-detect with Whisper + AI"}
-                            </Button>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            ⚠️ This will replace current segments with new
-                            detection results
-                          </p>
-                        </div>
-                      </>
-                    )}
-
-                    {/* Show info if loaded project */}
-                    {currentProjectId && segments.length > 0 && (
-                      <div className="p-3 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
-                        <p className="text-sm text-green-700 dark:text-green-300 flex items-center gap-2">
-                          <FiCheckCircle /> Project loaded with{" "}
-                          {segments.length} segments
+                      {whisperTranscription && !isTranscribing && (
+                        <p className="text-xs text-green-600 flex items-center gap-1">
+                          <FiCheckCircle size={12} />
+                          Whisper cached in localStorage - only GPT-4o mapping
+                          cost
                         </p>
-                        {audioFile && (
-                          <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
-                            <FiCheckCircle size={12} /> Audio attached - Ready
-                            to download
-                          </p>
-                        )}
-                        {!audioFile && (
-                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
-                            <FiAlertCircle size={12} /> Upload audio file to
-                            enable downloads
-                          </p>
-                        )}
+                      )}
+                    </div>
+
+                    {/* Silence Detection Settings - Hidden for now */}
+                    {false && (
+                      <div className="space-y-2">
+                        <Label className="text-sm font-medium">
+                          Silence Detection Settings
+                        </Label>
+                        <div className="space-y-2">
+                          <div>
+                            <Label
+                              htmlFor="min-silence"
+                              className="text-xs text-muted-foreground"
+                            >
+                              Min Silence Duration:{" "}
+                              {minSilenceDuration.toFixed(2)}s
+                            </Label>
+                            <input
+                              id="min-silence"
+                              type="range"
+                              min="0.1"
+                              max="1"
+                              step="0.05"
+                              value={minSilenceDuration}
+                              onChange={(e) =>
+                                setMinSilenceDuration(
+                                  parseFloat(e.target.value)
+                                )
+                              }
+                              className="w-full cursor-pointer"
+                            />
+                          </div>
+                          <div>
+                            <Label
+                              htmlFor="silence-threshold"
+                              className="text-xs text-muted-foreground"
+                            >
+                              Sensitivity: {silenceThreshold.toFixed(3)}
+                            </Label>
+                            <input
+                              id="silence-threshold"
+                              type="range"
+                              min="0.001"
+                              max="0.05"
+                              step="0.001"
+                              value={silenceThreshold}
+                              onChange={(e) =>
+                                setSilenceThreshold(parseFloat(e.target.value))
+                              }
+                              className="w-full cursor-pointer"
+                            />
+                          </div>
+                          <div className="flex justify-between items-center">
+                            <p className="text-xs text-muted-foreground">
+                              Not detecting enough? Increase sensitivity →
+                            </p>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setSilenceThreshold(0.04);
+                                setMinSilenceDuration(0.2);
+                              }}
+                              className="text-xs h-6 cursor-pointer"
+                            >
+                              Reset
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     )}
                   </>
+                )}
+
+                {/* Re-run detection options when segments exist */}
+                {segments.length > 0 && (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium">
+                        Re-run Detection
+                      </Label>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Button
+                          onClick={handleFreshWhisperTranscription}
+                          disabled={isTranscribing || !selectedSurah}
+                          variant="outline"
+                          size="sm"
+                          className="cursor-pointer transition-all duration-200 hover:bg-accent"
+                        >
+                          {isTranscribing
+                            ? "Transcribing..."
+                            : "Re-transcribe with Whisper"}
+                        </Button>
+                        <Button
+                          onClick={() => handleTranscribe(false)}
+                          disabled={isTranscribing || !selectedSurah}
+                          variant="outline"
+                          size="sm"
+                          className="cursor-pointer transition-all duration-200 hover:bg-accent"
+                        >
+                          {isTranscribing
+                            ? "AI Mapping..."
+                            : whisperTranscription
+                            ? "Re-map with AI (Cheap)"
+                            : "Re-detect with Whisper + AI"}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        ⚠️ This will replace current segments with new detection
+                        results
+                      </p>
+                    </div>
+                  </>
+                )}
+
+                {/* Show info if loaded project */}
+                {currentProjectId && segments.length > 0 && (
+                  <div className="p-3 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
+                    <p className="text-sm text-green-700 dark:text-green-300 flex items-center gap-2">
+                      <FiCheckCircle /> Project loaded with {segments.length}{" "}
+                      segments
+                    </p>
+                    {audioFile && (
+                      <p className="text-xs text-green-600 dark:text-green-400 mt-1 flex items-center gap-1">
+                        <FiCheckCircle size={12} /> Audio attached - Ready to
+                        download
+                      </p>
+                    )}
+                    {!audioFile && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                        <FiAlertCircle size={12} /> Upload audio file to enable
+                        downloads
+                      </p>
+                    )}
+                  </div>
                 )}
               </>
             )}

@@ -154,27 +154,29 @@ export default function LibraryPage() {
   return (
     <>
       <Navbar />
-      <div className="container mx-auto px-4 py-8 pt-24">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-3xl font-bold flex items-center gap-3">
+      <div className="container mx-auto px-4 py-4 sm:py-6 pt-20 sm:pt-24">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4 sm:mb-6">
+          <div className="min-w-0 flex-1">
+            <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 sm:gap-3">
               Project Library
             </h1>
-            <p className="text-muted-foreground mt-2">
+            <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">
               Your saved segmentation projects
             </p>
           </div>
           <Button
             onClick={() => setShowCreateDialog(true)}
-            className="cursor-pointer gap-2"
+            className="cursor-pointer gap-1 sm:gap-2 text-sm sm:text-base px-3 sm:px-4 py-2 sm:py-2 w-full sm:w-auto"
           >
-            <FiPlus /> Create New Project
+            <FiPlus className="h-4 w-4" />
+            <span className="hidden xs:inline">Create New Project</span>
+            <span className="xs:hidden">New Project</span>
           </Button>
         </div>
 
         {projects.length === 0 ? (
           <Card>
-            <CardContent className="flex flex-col items-center justify-center py-16">
+            <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground mb-4">
                 No saved projects yet
               </p>
@@ -187,85 +189,137 @@ export default function LibraryPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid gap-3 sm:gap-4 items-start">
             {projects.map((project) => (
               <Card
                 key={project.id}
                 className="transition-all duration-200 hover:border-primary/30"
               >
-                <CardHeader>
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <CardTitle className="text-xl">{project.name}</CardTitle>
-                      <CardDescription className="mt-2 space-y-1">
-                        <div className="flex items-center gap-4 text-sm">
-                          <span className="flex items-center gap-1">
-                            <FiFile size={14} /> {project.fileName || "No file"}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <FiBook size={14} /> Surah {project.surahNumber} -{" "}
-                            {project.surahName}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <FiHash size={14} /> {project.segments.length}{" "}
-                            segments
-                          </span>
+                <CardHeader className="p-4 sm:p-6">
+                  <div className="flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4">
+                    <div className="flex-1 min-w-0">
+                      <CardTitle className="text-lg sm:text-xl wrap-break-word">
+                        {project.name}
+                      </CardTitle>
+                      <CardDescription className="mt-2 space-y-2">
+                        <div className="flex flex-col gap-2 text-xs sm:text-sm">
+                          <div className="flex items-start gap-1">
+                            <FiFile size={12} className="shrink-0 mt-0.5" />
+                            <span className="wrap-break-word min-w-0">
+                              {project.fileName || "No file"}
+                            </span>
+                          </div>
+                          <div className="flex items-start gap-1">
+                            <FiBook size={12} className="shrink-0 mt-0.5" />
+                            <span className="wrap-break-word min-w-0">
+                              Surah {project.surahNumber} - {project.surahName}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <FiHash size={12} className="shrink-0" />
+                            <span>{project.segments.length} segments</span>
+                          </div>
                         </div>
-                        <div className="flex items-center gap-4 text-xs">
-                          <span className="flex items-center gap-1">
-                            <FiCalendar size={12} /> Created:{" "}
-                            {formatDate(project.dateCreated)}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <FiClock size={12} /> Modified:{" "}
-                            {formatDate(project.lastModified)}
-                          </span>
+                        <div className="flex flex-col gap-2 text-xs">
+                          <div className="flex items-start gap-1">
+                            <FiCalendar size={10} className="shrink-0 mt-0.5" />
+                            <span className="wrap-break-word min-w-0">
+                              Created:{" "}
+                              {formatDate(
+                                project.dateCreated || project.createdAt
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex items-start gap-1">
+                            <FiClock size={10} className="shrink-0 mt-0.5" />
+                            <span className="wrap-break-word min-w-0">
+                              Modified: {formatDate(project.lastModified)}
+                            </span>
+                          </div>
                         </div>
                       </CardDescription>
                     </div>
-                    <div className="flex gap-2">
-                      <Link href={`/reader/${project.id}`}>
+
+                    {/* Mobile: Stack buttons vertically, Desktop: Horizontal */}
+                    <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                      <div className="flex gap-1 sm:gap-2 flex-wrap">
+                        {project.segments.length > 0 ? (
+                          <Link
+                            href={`/reader/${project.id}`}
+                            className="flex-none"
+                          >
+                            <Button
+                              size="sm"
+                              className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto bg-primary text-primary-foreground hover:bg-primary/90"
+                            >
+                              <FiBook size={12} className="sm:hidden" />
+                              <FiBook size={14} className="hidden sm:block" />
+                              <span className="text-xs">Read</span>
+                            </Button>
+                          </Link>
+                        ) : (
+                          <Button
+                            size="sm"
+                            disabled
+                            className="gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-50 cursor-not-allowed"
+                          >
+                            <FiBook size={12} className="sm:hidden" />
+                            <FiBook size={14} className="hidden sm:block" />
+                            <span className="text-xs">Read</span>
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="outline"
-                          className="cursor-pointer gap-1"
+                          onClick={() => handleOpenRename(project.id)}
+                          className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 transition-opacity"
                         >
-                          <FiBook size={14} /> Read
+                          <FiEdit2 size={12} className="sm:hidden" />
+                          <FiEdit2 size={14} className="hidden sm:block" />
+                          <span className="text-xs">Rename</span>
                         </Button>
-                      </Link>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleOpenRename(project.id)}
-                        className="cursor-pointer gap-1"
-                      >
-                        <FiEdit2 size={14} /> Rename
-                      </Button>
-                      <Link href={`/editor/${project.id}`}>
-                        <Button size="sm" className="cursor-pointer gap-1">
-                          <FiEdit size={14} /> Edit
+                      </div>
+
+                      <div className="flex gap-1 sm:gap-2 flex-wrap">
+                        <Link
+                          href={`/editor/${project.id}`}
+                          className="flex-none"
+                        >
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 transition-opacity"
+                          >
+                            <FiEdit size={12} className="sm:hidden" />
+                            <FiEdit size={14} className="hidden sm:block" />
+                            <span className="text-xs">Edit</span>
+                          </Button>
+                        </Link>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleExport(project)}
+                          className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 transition-opacity"
+                        >
+                          <FiDownload size={12} className="sm:hidden" />
+                          <FiDownload size={14} className="hidden sm:block" />
+                          <span className="text-xs">Export</span>
                         </Button>
-                      </Link>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleExport(project)}
-                        className="cursor-pointer gap-1"
-                      >
-                        <FiDownload size={14} /> Export
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleDelete(project.id)}
-                        className="cursor-pointer text-destructive hover:bg-destructive/10 gap-1"
-                      >
-                        <FiTrash2 size={14} /> Delete
-                      </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDelete(project.id)}
+                          className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 text-muted-foreground hover:text-destructive hover:border-destructive transition-all"
+                        >
+                          <FiTrash2 size={12} className="sm:hidden" />
+                          <FiTrash2 size={14} className="hidden sm:block" />
+                          <span className="text-xs">Delete</span>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </CardHeader>
-                {project.ayahTexts.length > 0 && (
+                {project.ayahTexts && project.ayahTexts.length > 0 && (
                   <CardContent>
                     <div className="text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">

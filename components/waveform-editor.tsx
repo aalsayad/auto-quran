@@ -23,6 +23,7 @@ interface Segment {
   text: string;
   ayahNumber?: number;
   ayahNumbers?: number[];
+  confidence: number;
 }
 
 interface WaveformEditorProps {
@@ -48,6 +49,7 @@ export default function WaveformEditor({
   const regionTextMap = useRef<Map<string, string>>(new Map()); // Store region ID -> text mapping
   const regionAyahMap = useRef<Map<string, number | undefined>>(new Map()); // Store region ID -> ayah number mapping
   const regionAyahsMap = useRef<Map<string, number[] | undefined>>(new Map()); // Store region ID -> multiple ayah numbers mapping
+  const regionConfidenceMap = useRef<Map<string, number>>(new Map()); // Store region ID -> confidence mapping
   const [isPlaying, setIsPlaying] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [selectedRegionId, setSelectedRegionId] = useState<string | null>(null);
@@ -89,6 +91,7 @@ export default function WaveformEditor({
         text: regionTextMap.current.get(region.id) || "", // Get text from map
         ayahNumber: regionAyahMap.current.get(region.id), // Get ayah number from map
         ayahNumbers: regionAyahsMap.current.get(region.id), // Get multiple ayah numbers from map
+        confidence: regionConfidenceMap.current.get(region.id) || 0, // Get confidence from map
       }))
       .sort((a, b) => a.start - b.start); // Sort by start time to match visual order
 
@@ -294,6 +297,7 @@ export default function WaveformEditor({
       regionTextMap.current.set(regionId, segment.text);
       regionAyahMap.current.set(regionId, segment.ayahNumber);
       regionAyahsMap.current.set(regionId, segment.ayahNumbers);
+      regionConfidenceMap.current.set(regionId, segment.confidence);
 
       regionsRef.current?.addRegion({
         id: regionId,
@@ -375,6 +379,7 @@ export default function WaveformEditor({
     regionTextMap.current.set(regionId, "");
     regionAyahMap.current.set(regionId, undefined);
     regionAyahsMap.current.set(regionId, undefined);
+    regionConfidenceMap.current.set(regionId, 0);
 
     regionsRef.current.addRegion({
       id: regionId,
@@ -422,6 +427,7 @@ export default function WaveformEditor({
     regionTextMap.current.set(regionId, "");
     regionAyahMap.current.set(regionId, undefined);
     regionAyahsMap.current.set(regionId, undefined);
+    regionConfidenceMap.current.set(regionId, 0);
 
     regionsRef.current.addRegion({
       id: regionId,

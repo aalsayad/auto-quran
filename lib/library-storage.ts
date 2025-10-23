@@ -1,29 +1,7 @@
-export interface SavedProject {
-  id: string;
-  name: string;
-  fileName: string;
-  audioUrl?: string; // S3 URL for the uploaded audio file
-  surahNumber: number;
-  surahName: string;
-  dateCreated: string;
-  lastModified: string;
-  segments: {
-    start: number;
-    end: number;
-    text: string;
-    ayahNumber?: number;
-    ayahNumbers?: number[];
-  }[];
-  ayahTexts: string[];
-  silenceThreshold?: number;
-  minSilenceDuration?: number;
-  endPadding?: number;
-  startPadding?: number;
-  whisperTranscription?: {
-    segments: { start: number; end: number; text: string }[];
-    text: string;
-  };
-}
+import type { SavedProject } from "./types";
+
+// Re-export SavedProject for backward compatibility
+export type { SavedProject } from "./types";
 
 const STORAGE_KEY = "quran-splitter-library";
 
