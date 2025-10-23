@@ -353,33 +353,58 @@ export default function AudioUploader() {
       );
       console.log("🎵 [S3 Upload] File type:", file.type);
 
-      const formData = new FormData();
-      formData.append("file", file);
-
-      console.log("📤 [S3 Upload] Sending request to /api/upload-audio...");
-
-      const response = await fetch("/api/upload-audio", {
+      // Step 1: Get presigned URL from our API
+      console.log("🔐 [S3 Upload] Requesting presigned URL...");
+      const presignedResponse = await fetch("/api/upload-audio", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fileName: file.name,
+          contentType: file.type,
+        }),
       });
 
       console.log(
         "📥 [S3 Upload] Response received:",
-        response.status,
-        response.statusText
+        presignedResponse.status,
+        presignedResponse.statusText
       );
 
-      if (!response.ok) {
-        const error = await response.json();
-        console.error("❌ [S3 Upload] Upload failed:", error);
-        throw new Error(error.error || "Upload failed");
+      if (!presignedResponse.ok) {
+        const error = await presignedResponse.json();
+        console.error("❌ [S3 Upload] Failed to get upload URL:", error);
+        throw new Error(error.error || "Failed to get upload URL");
       }
 
-      const data = await response.json();
+      const { uploadUrl, fileUrl } = await presignedResponse.json();
+      console.log("✅ [S3 Upload] Got presigned URL");
+
+      // Step 2: Upload directly to S3 using presigned URL
+      console.log("☁️  [S3 Upload] Uploading directly to S3...");
+      const uploadResponse = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type,
+        },
+        body: file,
+      });
+
+      console.log(
+        "📥 [S3 Upload] S3 upload response:",
+        uploadResponse.status,
+        uploadResponse.statusText
+      );
+
+      if (!uploadResponse.ok) {
+        console.error("❌ [S3 Upload] S3 upload failed");
+        throw new Error("S3 upload failed");
+      }
+
       console.log("✅ [S3 Upload] Upload successful!");
-      console.log("🔗 [S3 Upload] S3 URL:", data.url);
-      console.log("📝 [S3 Upload] File name in S3:", data.fileName);
-      return data.url;
+      console.log("🔗 [S3 Upload] S3 URL:", fileUrl);
+      return fileUrl;
     } catch (error) {
       console.error("💥 [S3 Upload] Error occurred:", error);
       const errorMessage =

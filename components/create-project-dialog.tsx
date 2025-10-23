@@ -131,26 +131,47 @@ export default function CreateProjectDialog({
       console.log("⚠️  [Create] Could not auto-detect surah from filename");
     }
 
-    // Upload to S3
+    // Upload to S3 using presigned URL
     try {
       setIsUploading(true);
       console.log("🚀 [Create] Uploading to S3...", file.name);
 
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const response = await fetch("/api/upload-audio", {
+      // Step 1: Get presigned URL from our API
+      console.log("🔐 [Create] Requesting presigned URL...");
+      const presignedResponse = await fetch("/api/upload-audio", {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fileName: file.name,
+          contentType: file.type,
+        }),
       });
 
-      if (!response.ok) {
-        throw new Error("Upload failed");
+      if (!presignedResponse.ok) {
+        throw new Error("Failed to get upload URL");
       }
 
-      const data = await response.json();
-      setAudioUrl(data.url);
-      console.log("✅ [Create] Upload successful:", data.url);
+      const { uploadUrl, fileUrl } = await presignedResponse.json();
+      console.log("✅ [Create] Got presigned URL");
+
+      // Step 2: Upload directly to S3 using presigned URL
+      console.log("☁️  [Create] Uploading directly to S3...");
+      const uploadResponse = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": file.type,
+        },
+        body: file,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error("S3 upload failed");
+      }
+
+      setAudioUrl(fileUrl);
+      console.log("✅ [Create] Upload successful:", fileUrl);
     } catch (error) {
       console.error("❌ [Create] Upload failed:", error);
       alert("Failed to upload audio. Please try again.");

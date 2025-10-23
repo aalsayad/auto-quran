@@ -1,59 +1,56 @@
 import { NextRequest, NextResponse } from "next/server";
-import { uploadToS3 } from "@/lib/s3-upload";
+import { generatePresignedUrl } from "@/lib/s3-upload";
 
 export async function POST(request: NextRequest) {
   try {
-    console.log("🎯 [API] Upload request received");
+    console.log("🎯 [API] Presigned URL request received");
 
-    const formData = await request.formData();
-    const file = formData.get("file") as File;
+    const body = await request.json();
+    const { fileName, contentType } = body;
 
-    if (!file) {
-      console.error("❌ [API] No file provided in request");
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    if (!fileName || !contentType) {
+      console.error("❌ [API] Missing fileName or contentType");
+      return NextResponse.json(
+        { error: "fileName and contentType are required" },
+        { status: 400 }
+      );
     }
 
-    console.log("📄 [API] File received:", file.name);
-    console.log(
-      "📏 [API] File size:",
-      (file.size / 1024 / 1024).toFixed(2),
-      "MB"
-    );
-    console.log("🎵 [API] File type:", file.type);
+    console.log("📄 [API] Generating presigned URL for:", fileName);
+    console.log("🎵 [API] Content type:", contentType);
 
-    // Validate file type
-    if (!file.type.includes("audio")) {
-      console.error("❌ [API] Invalid file type:", file.type);
+    // Validate content type
+    if (!contentType.includes("audio")) {
+      console.error("❌ [API] Invalid content type:", contentType);
       return NextResponse.json(
         { error: "File must be an audio file" },
         { status: 400 }
       );
     }
 
-    console.log("✅ [API] File validation passed");
-    console.log("🔄 [API] Converting file to buffer...");
+    console.log("✅ [API] Validation passed");
 
-    // Convert file to buffer
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
-    console.log("✅ [API] Buffer created, size:", buffer.length, "bytes");
-
-    // Upload to S3
-    console.log("☁️  [API] Starting S3 upload...");
-    const s3Url = await uploadToS3(buffer, file.name, file.type);
-    console.log("✅ [API] S3 upload successful!");
-    console.log("🔗 [API] S3 URL:", s3Url);
+    // Generate presigned URL
+    console.log("🔐 [API] Generating presigned URL...");
+    const { uploadUrl, fileUrl, key } = await generatePresignedUrl(
+      fileName,
+      contentType
+    );
+    console.log("✅ [API] Presigned URL generated!");
+    console.log("🔗 [API] Upload URL:", uploadUrl);
+    console.log("🔗 [API] Final file URL:", fileUrl);
 
     return NextResponse.json({
       success: true,
-      url: s3Url,
-      fileName: file.name,
+      uploadUrl,
+      fileUrl,
+      key,
+      fileName,
     });
   } catch (error: unknown) {
-    console.error("💥 [API] Upload error:", error);
+    console.error("💥 [API] Error generating presigned URL:", error);
     const errorMessage =
-      error instanceof Error ? error.message : "Upload failed";
+      error instanceof Error ? error.message : "Failed to generate upload URL";
     console.error("📋 [API] Error details:", {
       message: errorMessage,
       stack: error instanceof Error ? error.stack : undefined,

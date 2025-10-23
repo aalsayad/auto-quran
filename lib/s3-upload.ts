@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // Initialize S3 client (server-side only) - lazy initialization
 let s3Client: S3Client | null = null;
@@ -74,6 +75,51 @@ export async function uploadToS3(
   console.log("🔗 [S3] Generated public URL:", url);
 
   return url;
+}
+
+export async function generatePresignedUrl(
+  fileName: string,
+  contentType: string
+): Promise<{ uploadUrl: string; fileUrl: string; key: string }> {
+  console.log("🔐 [S3] generatePresignedUrl called");
+  console.log("📁 [S3] File name:", fileName);
+  console.log("🎵 [S3] Content type:", contentType);
+
+  const bucketName = process.env.AWS_S3_BUCKET_NAME!;
+
+  // Generate unique file name with timestamp
+  const timestamp = Date.now();
+  const cleanFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, "_");
+  const key = `audio/${timestamp}-${cleanFileName}`;
+
+  console.log("🔑 [S3] Generated S3 key:", key);
+
+  const command = new PutObjectCommand({
+    Bucket: bucketName,
+    Key: key,
+    ContentType: contentType,
+  });
+
+  const client = getS3Client();
+
+  console.log("⏳ [S3] Generating presigned URL (expires in 10 minutes)...");
+
+  try {
+    // Generate presigned URL that expires in 10 minutes
+    const uploadUrl = await getSignedUrl(client, command, { expiresIn: 600 });
+
+    // Generate the final public URL
+    const fileUrl = `https://${bucketName}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+    console.log("✅ [S3] Presigned URL generated successfully!");
+    console.log("🔗 [S3] Upload URL:", uploadUrl);
+    console.log("🔗 [S3] Final file URL:", fileUrl);
+
+    return { uploadUrl, fileUrl, key };
+  } catch (error) {
+    console.error("💥 [S3] Failed to generate presigned URL:", error);
+    throw error;
+  }
 }
 
 export async function deleteFromS3(fileUrl: string): Promise<boolean> {
