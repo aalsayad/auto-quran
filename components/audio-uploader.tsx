@@ -702,126 +702,62 @@ export default function AudioUploader() {
       message: "",
     });
 
-    let chunkUrls: string[] = []; // Track chunk URLs for cleanup
-
     try {
       let finalTranscription = cachedTranscription;
-      const allMappedSegments: Segment[] = []; // Collect mapped segments from all chunks
+      const allMappedSegments: Segment[] = [];
 
       // If we don't have cached transcription, need to transcribe with Whisper
-      if (!finalTranscription && audioFile) {
+      if (!finalTranscription && audioFile && audioUrl) {
         console.log(
           forceRefresh
             ? `🔄 FORCING FRESH Whisper transcription for ${audioFile.name}`
             : `🎤 Starting Whisper transcription for ${audioFile.name}`
         );
 
-        // Step 1: Chunk the audio file
         setTranscriptionProgress({
           current: 0,
           total: 1,
-          percentage: 0,
-          message: "Preparing audio chunks...",
+          percentage: 50,
+          message: "Transcribing with Whisper (AWS Lambda)...",
         });
 
-        const { chunks, chunkUrls: tempChunkUrls } = await chunkAudioFile(
-          audioFile
-        );
-        chunkUrls = tempChunkUrls; // Save for cleanup in finally block
-        console.log(`📦 Created ${chunks.length} chunk(s)`);
+        console.log(`🚀 Calling Lambda for transcription...`);
+        console.log(`🔗 Audio URL: ${audioUrl}`);
 
-        if (chunks.length === 0) {
-          throw new Error("Failed to create audio chunks");
-        }
-
-        // Get total audio duration to calculate chunk duration
-        const audio = document.createElement("audio");
-        audio.src = URL.createObjectURL(audioFile);
-        await new Promise((resolve) => {
-          audio.onloadedmetadata = resolve;
-        });
-        const totalDuration = audio.duration;
-        URL.revokeObjectURL(audio.src);
-
-        const chunkDuration = totalDuration / chunks.length;
-        console.log(
-          `⏱️ Calculated chunk duration: ${(chunkDuration / 60).toFixed(
-            1
-          )} minutes per chunk`
-        );
-
-        // Step 2A: Transcribe ALL audio chunks first (collect all Whisper segments)
-        const allSegments: { start: number; end: number; text: string }[] = [];
-
-        console.log(
-          `🎤 Starting Whisper transcription for ${chunks.length} audio chunks...`
-        );
-
-        for (let i = 0; i < chunks.length; i++) {
-          const chunkNum = i + 1;
-
-          // ✅ Calculate ACTUAL time offset from chunk position (prevents drift!)
-          const actualTimeOffset = i * chunkDuration; // Dynamic based on file size
-
-          setTranscriptionProgress({
-            current: chunkNum,
-            total: chunks.length,
-            percentage: Math.round((chunkNum / chunks.length) * 60), // 0-60% for transcription
-            message: `Transcribing audio chunk ${chunkNum}/${chunks.length}...`,
-          });
-
-          console.log(
-            `🎤 [Transcribe ${chunkNum}/${
-              chunks.length
-            }] Processing chunk at ${actualTimeOffset.toFixed(2)}s...`
-          );
-
-          // Use S3 URL if available (for chunked files), otherwise fall back to direct upload
-          const response = await fetch("/api/transcribe-chunk", {
+        // 🚀 Simple Lambda call - Lambda handles everything
+        const response = await fetch(
+          "https://hzmc716qdh.execute-api.eu-north-1.amazonaws.com/default/auto-quran-transcribe-chunk/auto-quran-transcribe-chunk-api",
+          {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              audioUrl: chunkUrls[i], // Use S3 URL from chunk upload
-              chunkIndex: i,
-              totalChunks: chunks.length,
-              timeOffset: actualTimeOffset,
+              audioUrl: audioUrl,
+              surahNumber: selectedSurah,
             }),
-          });
-
-          const data = await response.json();
-
-          if (data.error) {
-            throw new Error(
-              `Chunk ${chunkNum} transcription failed: ${data.error}`
-            );
           }
+        );
 
-          if (data.segments && data.segments.length > 0) {
-            allSegments.push(...data.segments);
+        const data = await response.json();
 
-            console.log(
-              `✅ [Transcribe ${chunkNum}] Got ${
-                data.segments.length
-              } segments (total: ${
-                allSegments.length
-              }, offset: ${actualTimeOffset.toFixed(2)}s)`
-            );
-          }
+        if (!response.ok || data.error) {
+          throw new Error(data.error || "Transcription failed");
         }
 
-        // Merge and cache all transcriptions
-        finalTranscription = {
-          segments: allSegments,
-          text: allSegments.map((s) => s.text).join(" "),
-        };
+        if (!data.transcription) {
+          throw new Error("No transcription data returned from Lambda");
+        }
+
+        finalTranscription = data.transcription;
 
         console.log(
-          `🎉 Whisper complete! Total: ${finalTranscription.segments.length} segments`
+          `🎉 Whisper complete! Total: ${
+            finalTranscription?.segments?.length || 0
+          } segments`
         );
         setWhisperTranscription(finalTranscription);
 
         // Save Whisper transcription to localStorage
-        if (currentProjectId) {
+        if (currentProjectId && finalTranscription) {
           const existingProject = getProject(currentProjectId);
           if (existingProject) {
             saveProject({
@@ -830,13 +766,17 @@ export default function AudioUploader() {
               lastModified: new Date().toISOString(),
             });
             console.log(
-              `💾 Saved Whisper cache to localStorage (${allSegments.length} segments)`
+              `💾 Saved Whisper cache to localStorage (${
+                finalTranscription.segments?.length || 0
+              } segments)`
             );
           }
         }
       } else if (finalTranscription) {
         console.log(
-          `📦 Using cached Whisper transcription (${finalTranscription.segments.length} segments)`
+          `📦 Using cached Whisper transcription (${
+            finalTranscription.segments?.length || 0
+          } segments)`
         );
       }
 
@@ -950,37 +890,6 @@ export default function AudioUploader() {
         `AI detection failed: ${errorMessage}\n\nPlease try again or use silence detection.`
       );
     } finally {
-      // GUARANTEED CLEANUP - Always runs, even on error!
-      if (chunkUrls.length > 0) {
-        console.log(
-          `🗑️  Cleaning up ${chunkUrls.length} temporary chunks from S3...`
-        );
-
-        const deletePromises = chunkUrls.map(async (chunkUrl) => {
-          try {
-            const response = await fetch("/api/delete-audio", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ audioUrl: chunkUrl }),
-            });
-
-            if (response.ok) {
-              console.log(`✅ Deleted: ${chunkUrl.split("/").pop()}`);
-            } else {
-              console.warn(
-                `⚠️  Failed to delete: ${chunkUrl.split("/").pop()}`
-              );
-            }
-          } catch (error) {
-            console.error(`❌ Error deleting chunk: ${chunkUrl}`, error);
-          }
-        });
-
-        // Delete all chunks in parallel
-        await Promise.all(deletePromises);
-        console.log("✅ Cleanup complete!");
-      }
-
       setIsTranscribing(false);
       setTranscriptionProgress({
         current: 0,

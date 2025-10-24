@@ -1,0 +1,17 @@
+{
+  "name": "lambda-transcribe",
+  "version": "1.0.0",
+  "description": "This Lambda function handles Whisper transcription for Quran audio files, bypassing Vercel's timeout and payload limits.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.916.0",
+    "openai": "^6.6.0"
+  }
+}
