@@ -1036,8 +1036,8 @@ export default function AudioUploader() {
 
         // 💰 Capture GPT usage data
         const gptUsage = mappingData.usage || {
-          inputTokens: 0,
-          outputTokens: 0,
+          gpt5InputTokens: 0,
+          gpt5OutputTokens: 0,
         };
         console.log("📊 GPT usage data:", gptUsage);
 
@@ -1067,8 +1067,8 @@ export default function AudioUploader() {
                 audioDurationSeconds: whisperUsage.audioDurationSeconds || 0,
                 audioSizeBytes: whisperUsage.audioSizeBytes || 0,
                 whisperSegmentsCount: finalTranscription?.segments?.length || 0,
-                gpt5InputTokens: gptUsage.inputTokens || 0,
-                gpt5OutputTokens: gptUsage.outputTokens || 0,
+                gpt5InputTokens: gptUsage.gpt5InputTokens || 0,
+                gpt5OutputTokens: gptUsage.gpt5OutputTokens || 0,
                 lambdaExecutionMs: whisperUsage.lambdaExecutionMs || 0,
               };
 

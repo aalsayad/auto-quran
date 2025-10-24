@@ -220,8 +220,10 @@ export async function POST(request: NextRequest) {
         totalAyahs: quranTexts.length,
         detectedSegments: mappingResult.segments.length,
         confidence:
-          mappingResult.segments.reduce((acc, seg) => acc + (seg.confidence || 0), 0) /
-          mappingResult.segments.length,
+          mappingResult.segments.reduce(
+            (acc, seg) => acc + (seg.confidence || 0),
+            0
+          ) / mappingResult.segments.length,
       },
       // 💰 GPT-5 usage for token cost calculation
       usage: mappingResult.usage,

@@ -80,9 +80,10 @@ export function estimateTranscriptionCost(params: {
   );
 
   // GPT-4o cost estimation (for AI ayah mapping)
-  // Based on typical usage: ~200 tokens input per ayah, ~50 tokens output per ayah
-  const estimatedInputTokens = params.estimatedAyahs * 200;
-  const estimatedOutputTokens = params.estimatedAyahs * 50;
+  // Based on ACTUAL usage data: ~120 tokens input per ayah, ~85 tokens output per ayah
+  // Note: Output tokens cost 4x more than input, so accurate estimation is critical
+  const estimatedInputTokens = params.estimatedAyahs * 120;
+  const estimatedOutputTokens = params.estimatedAyahs * 85;
 
   const gpt5Tokens = Math.ceil(
     (estimatedInputTokens / 1000) * PRICING.GPT4O_INPUT_PER_1K +
@@ -92,24 +93,27 @@ export function estimateTranscriptionCost(params: {
   // Lambda cost estimation
   // Assume 1.5x audio duration for processing time (chunking, transcription, etc.)
   const estimatedLambdaSeconds = params.audioDurationMinutes * 60 * 1.5;
-  const lambdaTokens = Math.ceil(
-    estimatedLambdaSeconds * PRICING.LAMBDA_PER_SECOND_512MB
-  );
+  const lambdaCost = estimatedLambdaSeconds * PRICING.LAMBDA_PER_SECOND_512MB;
 
   // S3 cost: negligible for single operations
-  const s3Tokens = Math.ceil(params.audioSizeMB * 0.00001); // Minimal cost
+  const s3Cost = params.audioSizeMB * 0.00001;
 
-  const totalTokens = whisperTokens + gpt5Tokens + lambdaTokens + s3Tokens;
+  // Bundle Lambda + S3 costs together before rounding
+  // This prevents tiny costs from being rounded to 1 token each
+  const infrastructureCost = lambdaCost + s3Cost;
+  const infrastructureTokens = Math.ceil(infrastructureCost); // Round the total, not individually
+
+  const totalTokens = whisperTokens + gpt5Tokens + infrastructureTokens;
   const totalUsd = totalTokens * 0.01;
 
   return {
     whisperTokens,
     gpt5Tokens,
-    lambdaTokens,
-    s3Tokens,
+    lambdaTokens: infrastructureTokens, // Combined Lambda + S3
+    s3Tokens: 0, // Bundled with Lambda
     totalTokens,
     totalUsd,
-    breakdown: `Whisper: ${whisperTokens}t, GPT-5: ${gpt5Tokens}t, Lambda: ${lambdaTokens}t, S3: ${s3Tokens}t`,
+    breakdown: `Whisper: ${whisperTokens}t, GPT-5: ${gpt5Tokens}t, Infrastructure: ${infrastructureTokens}t`,
   };
 }
 
@@ -130,21 +134,25 @@ export function calculateActualCost(usage: ActualUsage): CostBreakdown {
   );
 
   // Lambda cost: actual execution time
-  const lambdaTokens = Math.ceil(
-    (usage.lambdaExecutionMs / 1000) * PRICING.LAMBDA_PER_SECOND_512MB
-  );
+  const lambdaCost =
+    (usage.lambdaExecutionMs / 1000) * PRICING.LAMBDA_PER_SECOND_512MB;
 
   // S3 cost: negligible
   const audioSizeMB = usage.audioSizeBytes / (1024 * 1024);
-  const s3Tokens = Math.ceil(audioSizeMB * 0.00001);
+  const s3Cost = audioSizeMB * 0.00001;
 
-  const totalTokens = whisperTokens + gpt5Tokens + lambdaTokens + s3Tokens;
+  // Bundle Lambda + S3 costs together before rounding
+  // This prevents tiny costs from being rounded to 1 token each
+  const infrastructureCost = lambdaCost + s3Cost;
+  const infrastructureTokens = Math.ceil(infrastructureCost); // Round the total, not individually
+
+  const totalTokens = whisperTokens + gpt5Tokens + infrastructureTokens;
 
   return {
     whisperTokens,
     gpt5Tokens,
-    lambdaTokens,
-    s3Tokens,
+    lambdaTokens: infrastructureTokens, // Combined Lambda + S3
+    s3Tokens: 0, // Bundled with Lambda
     totalTokens,
   };
 }
