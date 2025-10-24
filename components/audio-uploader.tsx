@@ -34,11 +34,17 @@ import { detectSilenceSegments } from "@/lib/silence-detector";
 import { fetchSurahText } from "@/lib/quran-api";
 import WaveformEditor from "@/components/waveform-editor";
 import {
-  saveProject,
   getProject,
   renameProject,
   type SavedProject,
 } from "@/lib/library-storage";
+import { useAuth } from "@/contexts/auth-context";
+import { getRecitation, updateRecitation } from "@/lib/supabase-storage";
+import {
+  recitationToSavedProject,
+  savedProjectToRecitation,
+  type AyahText,
+} from "@/lib/types";
 import {
   FiSave,
   FiDownload,
@@ -66,6 +72,7 @@ interface Segment {
 export default function AudioUploader() {
   const params = useParams();
   const projectId = params.projectId as string;
+  const { user } = useAuth();
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null); // S3 URL for uploaded audio
   const [isUploading, setIsUploading] = useState(false);
@@ -92,7 +99,7 @@ export default function AudioUploader() {
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState<
     number | null
   >(null);
-  const [ayahTexts, setAyahTexts] = useState<string[]>([]); // Store all ayah texts
+  const [ayahTexts, setAyahTexts] = useState<AyahText[]>([]); // Store all ayah texts
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Save/Load state
@@ -106,6 +113,33 @@ export default function AudioUploader() {
     segments: { start: number; end: number; text: string }[];
     text: string;
   } | null>(null);
+
+  // Universal save function that works with both Supabase and localStorage
+  const saveProjectUniversal = async (projectData: SavedProject) => {
+    if (user) {
+      // Save to Supabase for authenticated users
+      const recitationData = savedProjectToRecitation(projectData, user.id);
+      await updateRecitation(projectData.id, {
+        ...recitationData,
+        transcription_data: {
+          segments: projectData.segments,
+          ayah_texts: projectData.ayahTexts,
+          whisper: projectData.whisperTranscription,
+        },
+        settings_data: {
+          silence_threshold: projectData.silenceThreshold,
+          min_silence_duration: projectData.minSilenceDuration,
+          end_padding: projectData.endPadding,
+          start_padding: projectData.startPadding,
+        },
+      });
+      console.log("✅ Saved to Supabase:", projectData.id);
+    } else {
+      // Save to localStorage for non-authenticated users
+      await saveProjectUniversal(projectData);
+      console.log("✅ Saved to localStorage:", projectData.id);
+    }
+  };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -229,7 +263,7 @@ export default function AudioUploader() {
         renumbered[firstMissingIndex] = {
           ...renumbered[firstMissingIndex],
           ayahNumber: newSegmentNumber,
-          text: ayahTexts[newSegmentNumber - 1] || "",
+          text: ayahTexts[newSegmentNumber - 1]?.text || "",
         };
 
         // Renumber all subsequent segments
@@ -246,7 +280,7 @@ export default function AudioUploader() {
             renumbered[i] = {
               ...renumbered[i],
               ayahNumber: currentAyahNumber,
-              text: ayahTexts[currentAyahNumber - 1] || "",
+              text: ayahTexts[currentAyahNumber - 1]?.text || "",
             };
             currentAyahNumber++;
           }
@@ -259,11 +293,29 @@ export default function AudioUploader() {
 
   // Load project from URL params
   useEffect(() => {
-    if (projectId) {
+    const loadProject = async () => {
+      if (!projectId) return;
+
       console.log("Loading project:", projectId);
-      const project = getProject(projectId);
+
+      let project: SavedProject | null = null;
+
+      if (user) {
+        // Try loading from Supabase
+        const recitation = await getRecitation(projectId);
+        if (recitation) {
+          project = recitationToSavedProject(recitation);
+          console.log("Project loaded from Supabase:", project);
+        }
+      } else {
+        // Try loading from localStorage
+        project = getProject(projectId);
+        if (project) {
+          console.log("Project loaded from localStorage:", project);
+        }
+      }
+
       if (project) {
-        console.log("Project found:", project);
         // Load project data
         setCurrentProjectId(project.id);
         setProjectName(project.name);
@@ -301,8 +353,10 @@ export default function AudioUploader() {
         console.log("Project not found for ID:", projectId);
         alert("Project not found. It may have been deleted.");
       }
-    }
-  }, [projectId]);
+    };
+
+    loadProject();
+  }, [projectId, user]);
 
   const handleButtonClick = () => {
     fileInputRef.current?.click();
@@ -458,7 +512,7 @@ export default function AudioUploader() {
         id: currentProjectId || `project-${Date.now()}`,
         name: projectName.trim(),
         fileName: audioFile?.name || "Unknown file",
-        audioUrl: audioUrl || undefined, // Save S3 URL
+        audioUrl: audioUrl || "", // Save S3 URL
         surahNumber: selectedSurah,
         surahName: surahInfo?.transliteration || `Surah ${selectedSurah}`,
         dateCreated: currentProjectId
@@ -478,7 +532,7 @@ export default function AudioUploader() {
         whisperTranscription: whisperTranscription || undefined, // Cache Whisper transcription
       };
 
-      saveProject(project);
+      await saveProjectUniversal(project);
       setCurrentProjectId(project.id);
       setShowSaveDialog(false);
 
@@ -756,17 +810,27 @@ export default function AudioUploader() {
         );
         setWhisperTranscription(finalTranscription);
 
-        // Save Whisper transcription to localStorage
+        // Save Whisper transcription
         if (currentProjectId && finalTranscription) {
-          const existingProject = getProject(currentProjectId);
+          let existingProject: SavedProject | null = null;
+
+          if (user) {
+            const recitation = await getRecitation(currentProjectId);
+            existingProject = recitation
+              ? recitationToSavedProject(recitation)
+              : null;
+          } else {
+            existingProject = getProject(currentProjectId);
+          }
+
           if (existingProject) {
-            saveProject({
+            await saveProjectUniversal({
               ...existingProject,
               whisperTranscription: finalTranscription,
               lastModified: new Date().toISOString(),
             });
             console.log(
-              `💾 Saved Whisper cache to localStorage (${
+              `💾 Saved Whisper cache (${
                 finalTranscription.segments?.length || 0
               } segments)`
             );
@@ -820,16 +884,26 @@ export default function AudioUploader() {
           // Save after mapping
           setOriginalSegments(allMappedSegments);
           if (currentProjectId) {
-            const existingProject = getProject(currentProjectId);
+            let existingProject: SavedProject | null = null;
+
+            if (user) {
+              const recitation = await getRecitation(currentProjectId);
+              existingProject = recitation
+                ? recitationToSavedProject(recitation)
+                : null;
+            } else {
+              existingProject = getProject(currentProjectId);
+            }
+
             if (existingProject) {
-              saveProject({
+              await saveProjectUniversal({
                 ...existingProject,
                 segments: allMappedSegments,
                 whisperTranscription: finalTranscription,
                 lastModified: new Date().toISOString(),
               });
               console.log(
-                `💾 Saved ${allMappedSegments.length} mapped segments to localStorage`
+                `💾 Saved ${allMappedSegments.length} mapped segments`
               );
             }
           }
@@ -856,7 +930,7 @@ export default function AudioUploader() {
               whisperTranscription: finalTranscription || undefined,
               lastModified: new Date().toISOString(),
             };
-            saveProject(updatedProject);
+            await saveProjectUniversal(updatedProject);
             console.log(
               `✅ Auto-saved to localStorage: ${allMappedSegments.length} segments + Whisper cache`
             );
@@ -914,7 +988,7 @@ export default function AudioUploader() {
     if (currentProjectId) {
       const existingProject = getProject(currentProjectId);
       if (existingProject) {
-        saveProject({
+        await saveProjectUniversal({
           ...existingProject,
           whisperTranscription: undefined,
           lastModified: new Date().toISOString(),
@@ -951,7 +1025,7 @@ export default function AudioUploader() {
             segments: detectedSegments,
             lastModified: new Date().toISOString(),
           };
-          saveProject(updatedProject);
+          await saveProjectUniversal(updatedProject);
           console.log(
             `✅ Auto-saved ${detectedSegments.length} silence-detected segments to localStorage`
           );
@@ -971,7 +1045,10 @@ export default function AudioUploader() {
 
     try {
       const ayahs = await fetchSurahText(selectedSurah);
-      const ayahTextsArray = ayahs.map((ayah) => ayah.text);
+      const ayahTextsArray = ayahs.map((ayah, index) => ({
+        ayahNumber: index + 1,
+        text: ayah.text,
+      }));
       setAyahTexts(ayahTextsArray);
 
       // Auto-assign ayah numbers if not already assigned
@@ -979,7 +1056,7 @@ export default function AudioUploader() {
         const updatedSegments = segments.map((segment, index) => ({
           ...segment,
           ayahNumber: index + 1, // Start from 1 by default
-          text: ayahTextsArray[index] || "",
+          text: ayahTextsArray[index]?.text || "",
         }));
         setSegments(updatedSegments);
       } else if (segments.length > 0) {
@@ -988,7 +1065,7 @@ export default function AudioUploader() {
           ...segment,
           text:
             segment.ayahNumber !== undefined
-              ? ayahTextsArray[segment.ayahNumber - 1] || ""
+              ? ayahTextsArray[segment.ayahNumber - 1]?.text || ""
               : "",
         }));
         setSegments(updatedSegments);
@@ -1027,7 +1104,7 @@ export default function AudioUploader() {
       // Only update if it's not a merged segment (preserve merged segments)
       if (!segment.ayahNumbers) {
         updatedSegments[i].ayahNumber = currentAyahNumber;
-        updatedSegments[i].text = ayahTexts[currentAyahNumber - 1] || "";
+        updatedSegments[i].text = ayahTexts[currentAyahNumber - 1]?.text || "";
         currentAyahNumber++;
       } else {
         // For merged segments, advance the counter past all merged ayahs
@@ -1045,7 +1122,8 @@ export default function AudioUploader() {
     const updatedSegments = [...segments];
     updatedSegments[segmentIndex].ayahNumber = newAyahNumber;
     updatedSegments[segmentIndex].ayahNumbers = undefined; // Clear multiple ayahs if setting single
-    updatedSegments[segmentIndex].text = ayahTexts[newAyahNumber - 1] || "";
+    updatedSegments[segmentIndex].text =
+      ayahTexts[newAyahNumber - 1]?.text || "";
 
     // Auto-renumber all subsequent segments
     const finalSegments = autoRenumberSubsequentSegments(
@@ -1068,7 +1146,7 @@ export default function AudioUploader() {
       updatedSegments[segmentIndex].ayahNumbers = newAyahNumbers;
       updatedSegments[segmentIndex].ayahNumber = undefined; // Clear single ayah
       updatedSegments[segmentIndex].text = newAyahNumbers
-        .map((n) => ayahTexts[n - 1] || "")
+        .map((n) => ayahTexts[n - 1]?.text || "")
         .join(" ");
 
       // Auto-renumber all subsequent segments
@@ -1093,17 +1171,17 @@ export default function AudioUploader() {
       // If removing last ayah, reset to single ayah
       updatedSegments[segmentIndex].ayahNumber = segmentIndex + 1;
       updatedSegments[segmentIndex].ayahNumbers = undefined;
-      updatedSegments[segmentIndex].text = ayahTexts[segmentIndex] || "";
+      updatedSegments[segmentIndex].text = ayahTexts[segmentIndex]?.text || "";
     } else if (newAyahNumbers.length === 1) {
       // If only one ayah left, convert to single ayah
       updatedSegments[segmentIndex].ayahNumber = newAyahNumbers[0];
       updatedSegments[segmentIndex].ayahNumbers = undefined;
       updatedSegments[segmentIndex].text =
-        ayahTexts[newAyahNumbers[0] - 1] || "";
+        ayahTexts[newAyahNumbers[0] - 1]?.text || "";
     } else {
       updatedSegments[segmentIndex].ayahNumbers = newAyahNumbers;
       updatedSegments[segmentIndex].text = newAyahNumbers
-        .map((n) => ayahTexts[n - 1] || "")
+        .map((n) => ayahTexts[n - 1]?.text || "")
         .join(" ");
     }
 
@@ -1120,7 +1198,7 @@ export default function AudioUploader() {
       ...segment,
       ayahNumber: index + 1,
       ayahNumbers: undefined,
-      text: ayahTexts[index] || "",
+      text: ayahTexts[index]?.text || "",
     }));
     setSegments(updatedSegments);
   };
@@ -1145,7 +1223,7 @@ export default function AudioUploader() {
         renumbered[i] = {
           ...renumbered[i],
           ayahNumber: currentAyahNumber,
-          text: ayahTexts[currentAyahNumber - 1] || "",
+          text: ayahTexts[currentAyahNumber - 1]?.text || "",
         };
         currentAyahNumber++;
       }
@@ -1619,7 +1697,7 @@ export default function AudioUploader() {
                                   {ayahNum}
                                 </span>
                                 <p className="flex-1 text-sm" dir="rtl">
-                                  {ayahTexts[ayahNum - 1] || "No text"}
+                                  {ayahTexts[ayahNum - 1]?.text || "No text"}
                                 </p>
                                 <Button
                                   size="sm"
@@ -1650,7 +1728,7 @@ export default function AudioUploader() {
                                     (segments[selectedSegmentIndex]
                                       ?.ayahNumber ||
                                       selectedSegmentIndex + 1) - 1
-                                  ] || "No text available"}
+                                  ]?.text || "No text available"}
                             </p>
                           </div>
                         )}
@@ -1691,7 +1769,7 @@ export default function AudioUploader() {
                           <SelectItem value="0" className="cursor-pointer">
                             0 - Bismillah
                           </SelectItem>
-                          {ayahTexts.map((text, index) => (
+                          {ayahTexts.map((ayahText, index) => (
                             <SelectItem
                               key={index + 1}
                               value={(index + 1).toString()}
@@ -1703,7 +1781,7 @@ export default function AudioUploader() {
                                   className="text-xs text-muted-foreground truncate max-w-xs"
                                   dir="rtl"
                                 >
-                                  {text.substring(0, 40)}...
+                                  {ayahText.text.substring(0, 40)}...
                                 </span>
                               </div>
                             </SelectItem>
@@ -1735,7 +1813,7 @@ export default function AudioUploader() {
                           <SelectValue placeholder="+ Add ayah to this segment" />
                         </SelectTrigger>
                         <SelectContent className="max-h-64">
-                          {ayahTexts.map((text, index) => (
+                          {ayahTexts.map((ayahText, index) => (
                             <SelectItem
                               key={index + 1}
                               value={(index + 1).toString()}
@@ -1747,7 +1825,7 @@ export default function AudioUploader() {
                                   className="text-xs text-muted-foreground truncate max-w-xs"
                                   dir="rtl"
                                 >
-                                  {text.substring(0, 40)}...
+                                  {ayahText.text.substring(0, 40)}...
                                 </span>
                               </div>
                             </SelectItem>

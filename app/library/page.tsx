@@ -19,6 +19,13 @@ import {
 } from "@/lib/library-storage";
 import CreateProjectDialog from "@/components/create-project-dialog";
 import Navbar from "@/components/navbar";
+import { useAuth } from "@/contexts/auth-context";
+import {
+  getRecitations,
+  deleteRecitation,
+  updateRecitation,
+} from "@/lib/supabase-storage";
+import { recitationToSavedProject } from "@/lib/types";
 import {
   FiBook,
   FiPlus,
@@ -45,24 +52,49 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export default function LibraryPage() {
+  const { user } = useAuth();
   const [projects, setProjects] = useState<SavedProject[]>([]);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameProjectId, setRenameProjectId] = useState<string | null>(null);
   const [newProjectName, setNewProjectName] = useState("");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadProjects();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
-  const loadProjects = () => {
-    const allProjects = getAllProjects();
-    // Sort by last modified date (newest first)
-    allProjects.sort(
-      (a, b) =>
-        new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime()
-    );
-    setProjects(allProjects);
+  const loadProjects = async () => {
+    setLoading(true);
+    try {
+      if (user) {
+        // Load from Supabase for authenticated users
+        const recitations = await getRecitations(user.id);
+        const projectsData = recitations.map(recitationToSavedProject);
+        // Sort by last modified date (newest first)
+        projectsData.sort(
+          (a, b) =>
+            new Date(b.lastModified).getTime() -
+            new Date(a.lastModified).getTime()
+        );
+        setProjects(projectsData);
+      } else {
+        // Load from localStorage for non-authenticated users
+        const allProjects = getAllProjects();
+        // Sort by last modified date (newest first)
+        allProjects.sort(
+          (a, b) =>
+            new Date(b.lastModified).getTime() -
+            new Date(a.lastModified).getTime()
+        );
+        setProjects(allProjects);
+      }
+    } catch (error) {
+      console.error("❌ [Library] Error loading projects:", error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDelete = async (projectId: string) => {
@@ -102,8 +134,16 @@ export default function LibraryPage() {
         console.log("ℹ️  [Library] No audio URL found, skipping S3 deletion");
       }
 
-      // Delete project from localStorage
-      deleteProject(projectId);
+      if (user) {
+        // Delete from Supabase for authenticated users
+        await deleteRecitation(projectId);
+        console.log("✅ [Library] Recitation deleted from Supabase");
+      } else {
+        // Delete from localStorage for non-authenticated users
+        deleteProject(projectId);
+        console.log("✅ [Library] Project deleted from localStorage");
+      }
+
       loadProjects();
       console.log("✅ [Library] Project deleted successfully");
     } catch (error) {
@@ -125,11 +165,23 @@ export default function LibraryPage() {
     }
   };
 
-  const handleRename = () => {
+  const handleRename = async () => {
     if (!renameProjectId || !newProjectName.trim()) return;
 
     try {
-      renameProject(renameProjectId, newProjectName.trim());
+      if (user) {
+        // Update in Supabase (update reciter_name)
+        const newReciterName = newProjectName.trim().split(" - ")[0];
+        await updateRecitation(renameProjectId, {
+          reciter_name: newReciterName,
+        });
+        console.log("✅ [Library] Recitation renamed in Supabase");
+      } else {
+        // Update in localStorage
+        renameProject(renameProjectId, newProjectName.trim());
+        console.log("✅ [Library] Project renamed in localStorage");
+      }
+
       loadProjects();
       setShowRenameDialog(false);
       setRenameProjectId(null);
@@ -174,11 +226,21 @@ export default function LibraryPage() {
           </Button>
         </div>
 
-        {projects.length === 0 ? (
+        {loading ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <p className="text-lg text-muted-foreground">
+                Loading projects...
+              </p>
+            </CardContent>
+          </Card>
+        ) : projects.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground mb-4">
-                No saved projects yet
+                {user
+                  ? "No saved projects yet"
+                  : "Sign in to save your projects"}
               </p>
               <Button
                 onClick={() => setShowCreateDialog(true)}

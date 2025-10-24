@@ -6,6 +6,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { getProject, type SavedProject } from "@/lib/library-storage";
 import { SURAHS } from "@/lib/surah-data";
+import { useAuth } from "@/contexts/auth-context";
+import { getRecitation } from "@/lib/supabase-storage";
+import { recitationToSavedProject } from "@/lib/types";
 import { Amiri } from "next/font/google";
 import {
   FiEdit,
@@ -42,6 +45,7 @@ interface Ayah {
 export default function QuranReaderPage() {
   const params = useParams();
   const projectId = params.projectId as string;
+  const { user } = useAuth();
 
   const [project, setProject] = useState<SavedProject | null>(null);
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
@@ -125,70 +129,92 @@ export default function QuranReaderPage() {
 
   // Load project
   useEffect(() => {
-    const loadedProject = getProject(projectId);
-    if (loadedProject) {
-      setProject(loadedProject);
+    const loadProjectData = async () => {
+      let loadedProject: SavedProject | null = null;
 
-      // Auto-load audio from S3 if available
-      if (loadedProject.audioUrl) {
-        loadAudioFromS3(
-          loadedProject.audioUrl,
-          loadedProject.fileName || loadedProject.audioFileName || "audio.mp3"
-        );
+      if (user) {
+        // Try loading from Supabase
+        const recitation = await getRecitation(projectId);
+        if (recitation) {
+          loadedProject = recitationToSavedProject(recitation);
+          console.log("Project loaded from Supabase for reader");
+        }
+      } else {
+        // Try loading from localStorage
+        loadedProject = getProject(projectId);
+        if (loadedProject) {
+          console.log("Project loaded from localStorage for reader");
+        }
       }
 
-      // Fetch Quran text from LOCAL data (no API calls!)
-      const surahNumber = loadedProject.surahNumber;
+      if (loadedProject) {
+        setProject(loadedProject);
 
-      // Load for List View
-      getVersesBySurah(surahNumber).then((verses) => {
-        const formattedAyahs: Ayah[] = verses.map((v) => {
-          // Extract verse number from verse_key (e.g., "1:5" -> 5)
-          const verseNumber = parseInt(v.verse_key.split(":")[1]);
-          let text = v.text_uthmani;
+        // Auto-load audio from S3 if available
+        if (loadedProject.audioUrl) {
+          loadAudioFromS3(
+            loadedProject.audioUrl,
+            loadedProject.fileName || loadedProject.audioFileName || "audio.mp3"
+          );
+        }
 
-          // Remove Bismillah from first ayah if present (not Surah 1 or 9)
-          if (verseNumber === 1 && surahNumber !== 1 && surahNumber !== 9) {
-            const words = text.split(" ");
-            // Only remove if it actually starts with Bismillah
-            const bismillahPattern =
-              /^بِسْمِ\s+ٱللَّهِ\s+ٱلرَّحْمَ[ـٰ]نِ\s+ٱلرَّحِيمِ/;
-            if (bismillahPattern.test(text)) {
-              text = words.slice(4).join(" ");
+        // Fetch Quran text from LOCAL data (no API calls!)
+        const surahNumber = loadedProject.surahNumber;
+
+        // Load for List View
+        getVersesBySurah(surahNumber).then((verses) => {
+          const formattedAyahs: Ayah[] = verses.map((v) => {
+            // Extract verse number from verse_key (e.g., "1:5" -> 5)
+            const verseNumber = parseInt(v.verse_key.split(":")[1]);
+            let text = v.text_uthmani;
+
+            // Remove Bismillah from first ayah if present (not Surah 1 or 9)
+            if (verseNumber === 1 && surahNumber !== 1 && surahNumber !== 9) {
+              const words = text.split(" ");
+              // Only remove if it actually starts with Bismillah
+              const bismillahPattern =
+                /^بِسْمِ\s+ٱللَّهِ\s+ٱلرَّحْمَ[ـٰ]نِ\s+ٱلرَّحِيمِ/;
+              if (bismillahPattern.test(text)) {
+                text = words.slice(4).join(" ");
+              }
             }
-          }
 
-          // Extract translation (Clear Quran - ID 131)
-          const translation =
-            v.translations && v.translations.length > 0
-              ? v.translations[0].text
-              : undefined;
+            // Extract translation (Clear Quran - ID 131)
+            const translation =
+              v.translations && v.translations.length > 0
+                ? v.translations[0].text
+                : undefined;
 
-          return {
-            number: v.id,
-            text,
-            numberInSurah: verseNumber,
-            translation,
-          };
+            return {
+              number: v.id,
+              text,
+              numberInSurah: verseNumber,
+              translation,
+            };
+          });
+          setAyahs(formattedAyahs);
         });
-        setAyahs(formattedAyahs);
-      });
 
-      // Load for Mushaf View
-      getMushafPagesForSurah(surahNumber)
-        .then((verses) => {
-          console.log(`📖 Loaded ${verses.length} verses for Mushaf view`);
-          if (verses.length > 0) {
-            console.log("Sample verse:", verses[0]);
-          }
-          setMushafVerses(verses);
-        })
-        .catch((error) => {
-          console.error("❌ Failed to load Mushaf verses:", error);
-          setMushafVerses([]);
-        });
-    }
-  }, [projectId, loadAudioFromS3]);
+        // Load for Mushaf View
+        getMushafPagesForSurah(surahNumber)
+          .then((verses) => {
+            console.log(`📖 Loaded ${verses.length} verses for Mushaf view`);
+            if (verses.length > 0) {
+              console.log("Sample verse:", verses[0]);
+            }
+            setMushafVerses(verses);
+          })
+          .catch((error) => {
+            console.error("❌ Failed to load Mushaf verses:", error);
+            setMushafVerses([]);
+          });
+      } else {
+        alert("Project not found. It may have been deleted.");
+      }
+    };
+
+    loadProjectData();
+  }, [projectId, user, loadAudioFromS3]);
 
   // Audio event handlers
   const handleTimeUpdate = () => {

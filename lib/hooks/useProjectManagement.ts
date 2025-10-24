@@ -48,13 +48,25 @@ export function useProjectManagement(projectId: string | null) {
         name: data.name,
         surahNumber: data.surahNumber,
         segments: data.segments,
-        audioUrl: data.audioUrl,
+        audioUrl: data.audioUrl || "",
+        fileName: data.audioFileName || "",
         audioFileName: data.audioFileName,
         whisperTranscription: data.whisperTranscription,
         createdAt: currentProjectId
           ? getProject(currentProjectId)?.createdAt || new Date().toISOString()
           : new Date().toISOString(),
+        dateCreated: currentProjectId
+          ? getProject(currentProjectId)?.dateCreated ||
+            new Date().toISOString()
+          : new Date().toISOString(),
         lastModified: new Date().toISOString(),
+        reciter: "",
+        surahName: "",
+        ayahTexts: [],
+        silenceThreshold: 0.01,
+        minSilenceDuration: 0.5,
+        endPadding: 0.3,
+        startPadding: 0.1,
       };
 
       saveProject(projectToSave);

@@ -34,6 +34,8 @@ import {
   FiBook,
 } from "react-icons/fi";
 import type { FinalSegment } from "@/lib/types";
+import { useAuth } from "@/contexts/auth-context";
+import { createRecitation } from "@/lib/supabase-storage";
 
 interface CreateProjectDialogProps {
   open: boolean;
@@ -45,6 +47,7 @@ export default function CreateProjectDialog({
   onOpenChange,
 }: CreateProjectDialogProps) {
   const router = useRouter();
+  const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
@@ -182,7 +185,7 @@ export default function CreateProjectDialog({
     }
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!audioFile || !audioUrl) {
       alert("Please upload an MP3 file first");
       return;
@@ -201,9 +204,6 @@ export default function CreateProjectDialog({
     setIsCreating(true);
 
     try {
-      // Create new project ID
-      const projectId = `project-${Date.now()}`;
-
       // Initialize project with uploaded audio
       const surahInfo = SURAHS.find((s) => s.number === selectedSurah);
 
@@ -212,50 +212,98 @@ export default function CreateProjectDialog({
         surahInfo?.transliteration || `Surah ${selectedSurah}`
       }`;
 
-      const newProject = {
-        id: projectId,
-        name: projectName,
-        reciter: reciterName.trim(),
-        fileName: audioFile.name,
-        audioUrl: audioUrl,
-        surahNumber: selectedSurah,
-        surahName: surahInfo?.transliteration || `Surah ${selectedSurah}`,
-        createdAt: new Date().toISOString(),
-        dateCreated: new Date().toISOString(),
-        lastModified: new Date().toISOString(),
-        segments: segments, // Use imported segments if available
-        ayahTexts: [],
-        silenceThreshold: 0.04,
-        minSilenceDuration: 0.2,
-        endPadding: 0.3,
-        startPadding: 0,
-      };
+      if (user) {
+        // Save to Supabase for authenticated users
+        const recitation = await createRecitation(user.id, {
+          reciter_name: reciterName.trim(),
+          surah_number: selectedSurah,
+          surah_name: surahInfo?.transliteration || `Surah ${selectedSurah}`,
+          audio_url: audioUrl,
+          audio_file_name: audioFile.name,
+          status: segments.length > 0 ? "completed" : "pending",
+          transcription_data: {
+            segments: segments,
+            ayah_texts: [],
+          },
+          settings_data: {
+            silence_threshold: 0.04,
+            min_silence_duration: 0.2,
+            end_padding: 0.3,
+            start_padding: 0,
+          },
+          metadata: {},
+          reciter_id: null,
+        });
 
-      // Save project
-      saveProject(newProject);
+        console.log(
+          "✅ [Create] Recitation created in Supabase:",
+          recitation.id
+        );
 
-      console.log("✅ [Create] Project created:", projectId, newProject);
+        // Close dialog and reset state
+        onOpenChange(false);
+        setAudioFile(null);
+        setAudioUrl(null);
+        setReciterName("");
+        setSelectedSurah(null);
+        setDetectedSurah(null);
+        setJsonFile(null);
+        setSegments([]);
 
-      // Close dialog
-      onOpenChange(false);
+        // Navigate to reader if segments exist, otherwise editor
+        setTimeout(() => {
+          if (segments.length > 0) {
+            router.push(`/reader/${recitation.id}`);
+          } else {
+            router.push(`/editor/${recitation.id}`);
+          }
+        }, 100);
+      } else {
+        // Fallback to localStorage for non-authenticated users
+        const projectId = `project-${Date.now()}`;
 
-      // Reset state
-      setAudioFile(null);
-      setAudioUrl(null);
-      setReciterName("");
-      setSelectedSurah(null);
-      setDetectedSurah(null);
-      setJsonFile(null);
-      setSegments([]);
+        const newProject = {
+          id: projectId,
+          name: projectName,
+          reciter: reciterName.trim(),
+          fileName: audioFile.name,
+          audioUrl: audioUrl,
+          surahNumber: selectedSurah,
+          surahName: surahInfo?.transliteration || `Surah ${selectedSurah}`,
+          createdAt: new Date().toISOString(),
+          dateCreated: new Date().toISOString(),
+          lastModified: new Date().toISOString(),
+          segments: segments,
+          ayahTexts: [],
+          silenceThreshold: 0.04,
+          minSilenceDuration: 0.2,
+          endPadding: 0.3,
+          startPadding: 0,
+        };
 
-      // Navigate to reader if segments exist, otherwise editor
-      setTimeout(() => {
-        if (segments.length > 0) {
-          router.push(`/reader/${projectId}`);
-        } else {
-          router.push(`/editor/${projectId}`);
-        }
-      }, 100);
+        saveProject(newProject);
+
+        console.log("✅ [Create] Project created in localStorage:", projectId);
+
+        // Close dialog and reset state
+        onOpenChange(false);
+        setAudioFile(null);
+        setAudioUrl(null);
+        setReciterName("");
+        setSelectedSurah(null);
+        setDetectedSurah(null);
+        setJsonFile(null);
+        setSegments([]);
+
+        // Navigate to reader if segments exist, otherwise editor
+        setTimeout(() => {
+          if (segments.length > 0) {
+            router.push(`/reader/${projectId}`);
+          } else {
+            router.push(`/editor/${projectId}`);
+          }
+        }, 100);
+      }
     } catch (error) {
       console.error("❌ [Create] Failed to create project:", error);
       alert("Failed to create project. Please try again.");
