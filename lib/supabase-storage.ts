@@ -125,6 +125,7 @@ export async function createRecitation(
   const reciter = await getOrCreateReciter(userId, recitation.reciter_name);
 
   // Remove reciter_id from recitation object to avoid duplicate key error
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { reciter_id, ...recitationWithoutReciterId } = recitation;
 
   const { data, error } = await supabase

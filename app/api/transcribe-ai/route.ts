@@ -52,8 +52,13 @@ async function alignTextToAyahs(
     max_completion_tokens: 16000,
   });
 
+  // 💰 Log and save GPT-5 token usage for cost calculation
+  const gpt5InputTokens = response.usage?.prompt_tokens || 0;
+  const gpt5OutputTokens = response.usage?.completion_tokens || 0;
+  const gpt5TotalTokens = response.usage?.total_tokens || 0;
+
   console.log(
-    `💰 GPT-5 tokens: ${response.usage?.prompt_tokens} in + ${response.usage?.completion_tokens} out`
+    `💰 GPT-5 tokens: ${gpt5InputTokens} in + ${gpt5OutputTokens} out = ${gpt5TotalTokens} total`
   );
 
   // Parse AI response
@@ -84,7 +89,14 @@ async function alignTextToAyahs(
     `✅ Created ${finalSegments.length} final segments from ${whisperSegments.length} Whisper segments`
   );
 
-  return finalSegments;
+  return {
+    segments: finalSegments,
+    usage: {
+      gpt5InputTokens,
+      gpt5OutputTokens,
+      gpt5TotalTokens,
+    },
+  };
 }
 
 /**
@@ -191,14 +203,14 @@ export async function POST(request: NextRequest) {
     const quranTexts = quranAyahs.map((ayah) => ayah.text);
 
     // Map segments to ayahs using GPT-5
-    const finalSegments = await alignTextToAyahs(
+    const mappingResult = await alignTextToAyahs(
       transcription,
       quranTexts,
       surahNumber
     );
 
     return NextResponse.json({
-      segments: finalSegments,
+      segments: mappingResult.segments,
       transcription: {
         text: transcription.text,
         segments: transcription.segments,
@@ -206,11 +218,13 @@ export async function POST(request: NextRequest) {
       quranTexts: quranTexts,
       alignment: {
         totalAyahs: quranTexts.length,
-        detectedSegments: finalSegments.length,
+        detectedSegments: mappingResult.segments.length,
         confidence:
-          finalSegments.reduce((acc, seg) => acc + (seg.confidence || 0), 0) /
-          finalSegments.length,
+          mappingResult.segments.reduce((acc, seg) => acc + (seg.confidence || 0), 0) /
+          mappingResult.segments.length,
       },
+      // 💰 GPT-5 usage for token cost calculation
+      usage: mappingResult.usage,
     });
   } catch (error) {
     console.error("❌ AI mapping error:", error);

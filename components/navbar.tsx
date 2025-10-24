@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/auth-context";
 import AuthDialog from "@/components/auth-dialog";
 import { FiLogOut, FiLogIn, FiChevronDown } from "react-icons/fi";
+import { Coins } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,10 +15,36 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { getUserTokenBalance } from "@/lib/token-manager";
 
 export default function Navbar() {
   const { user, signOut, loading } = useAuth();
   const [showAuthDialog, setShowAuthDialog] = useState(false);
+  const [tokenBalance, setTokenBalance] = useState<number | null>(null);
+  const [loadingTokens, setLoadingTokens] = useState(false);
+
+  // Load token balance when user logs in
+  useEffect(() => {
+    const loadBalance = async () => {
+      if (!user) {
+        setTokenBalance(null);
+        return;
+      }
+
+      setLoadingTokens(true);
+      try {
+        const balance = await getUserTokenBalance(user.id);
+        setTokenBalance(balance.balanceTokens);
+      } catch (error) {
+        console.error("Failed to load token balance:", error);
+        setTokenBalance(null);
+      } finally {
+        setLoadingTokens(false);
+      }
+    };
+
+    loadBalance();
+  }, [user]);
 
   return (
     <>
@@ -71,6 +98,29 @@ export default function Navbar() {
                       </span>
                     </div>
                   </DropdownMenuLabel>
+
+                  {/* Token Balance Display */}
+                  <div className="px-2 py-2">
+                    <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2">
+                      <Coins className="h-4 w-4 text-primary" />
+                      <div className="flex-1 flex items-baseline gap-2">
+                        {loadingTokens ? (
+                          <span className="text-sm text-muted-foreground">Loading...</span>
+                        ) : tokenBalance !== null ? (
+                          <>
+                            <span className="text-sm font-semibold">{tokenBalance}</span>
+                            <span className="text-xs text-muted-foreground">tokens</span>
+                            <span className="text-xs text-muted-foreground ml-auto">
+                              ${(tokenBalance * 0.01).toFixed(2)}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-sm text-muted-foreground">--</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     onClick={() => signOut()}

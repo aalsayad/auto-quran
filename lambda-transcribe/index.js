@@ -300,6 +300,7 @@ async function transcribeAudioBuffer(buffer, fileName, timeOffset = 0) {
 
 /**
  * Transcribe audio with automatic chunking if needed
+ * Returns transcription plus usage metadata for cost calculation
  */
 async function transcribeWithChunking(audioBuffer, fileName) {
   const fileSize = audioBuffer.length;
@@ -308,7 +309,20 @@ async function transcribeWithChunking(audioBuffer, fileName) {
   // If file is small enough, transcribe directly
   if (fileSize <= MAX_FILE_SIZE) {
     console.log("✅ File size OK, transcribing directly...");
-    return await transcribeAudioBuffer(audioBuffer, fileName);
+    const result = await transcribeAudioBuffer(audioBuffer, fileName);
+
+    // Calculate duration from segments
+    const duration = result.segments.length > 0
+      ? result.segments[result.segments.length - 1].end
+      : 0;
+
+    return {
+      ...result,
+      metadata: {
+        duration: duration,
+        numChunks: 1,
+      },
+    };
   }
 
   // File is too large, need to chunk
@@ -374,6 +388,10 @@ async function transcribeWithChunking(audioBuffer, fileName) {
     return {
       segments: allSegments,
       text: fullText,
+      metadata: {
+        duration: duration,
+        numChunks: chunkPaths.length,
+      },
     };
   } finally {
     // GUARANTEED CLEANUP: Delete all temp chunks from S3 and local files
@@ -411,6 +429,9 @@ async function transcribeWithChunking(audioBuffer, fileName) {
  */
 exports.handler = async (event) => {
   console.log("📥 Received request");
+
+  // ⏱️ Track execution start time for usage calculation
+  const executionStartTime = Date.now();
 
   // 🧹 CRITICAL: Clean up /tmp from previous invocations to prevent memory buildup
   cleanupTempDirectory();
@@ -499,26 +520,41 @@ exports.handler = async (event) => {
     // 🧹 Help garbage collection: Clear large buffer reference
     audioBuffer = null;
 
-    // Step 3: Return result
+    // Step 3: Calculate execution time and return result with usage metadata
+    const executionTimeMs = Date.now() - executionStartTime;
+
     console.log(
       `🎉 Success! Total segments: ${transcriptionResult.segments.length}`
     );
+    console.log(`⏱️ Total execution time: ${(executionTimeMs / 1000).toFixed(2)}s`);
 
     const response = {
       statusCode: 200,
       headers: responseHeaders,
       body: JSON.stringify({
         success: true,
-        transcription: transcriptionResult,
+        transcription: {
+          segments: transcriptionResult.segments,
+          text: transcriptionResult.text,
+        },
         metadata: {
           surahNumber,
           fileSize: fileSize,
           segmentCount: transcriptionResult.segments.length,
         },
+        // 💰 Usage data for token cost calculation
+        usage: {
+          audioDurationSeconds: Math.round(transcriptionResult.metadata?.duration || 0),
+          audioSizeBytes: fileSize,
+          whisperSegmentCount: transcriptionResult.segments.length,
+          whisperApiCalls: transcriptionResult.metadata?.numChunks || 1,
+          lambdaExecutionMs: executionTimeMs,
+        },
       }),
     };
 
-    console.log("📤 Returning response to client");
+    console.log("📤 Returning response to client with usage data");
+    console.log(`💰 Usage: ${Math.round(transcriptionResult.metadata?.duration || 0)}s audio, ${(fileSize / 1024 / 1024).toFixed(2)}MB, ${transcriptionResult.segments.length} segments, ${(executionTimeMs / 1000).toFixed(2)}s execution`);
     return response;
   } catch (error) {
     console.error("❌ Transcription error:", error);

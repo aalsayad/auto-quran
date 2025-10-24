@@ -53,6 +53,17 @@ import {
   FiLink,
   FiEdit2,
 } from "react-icons/fi";
+import { CostEstimationDialog } from "@/components/cost-estimation-dialog";
+import {
+  estimateTranscriptionCost,
+  calculateActualCost,
+  type CostEstimate,
+} from "@/lib/token-pricing";
+import {
+  getUserTokenBalance,
+  reserveTokens,
+  recordTranscriptionUsage,
+} from "@/lib/token-manager";
 
 interface Segment {
   start: number;
@@ -74,7 +85,6 @@ export default function AudioUploader() {
   const [isUploading, setIsUploading] = useState(false);
   const [isFetchingAudio, setIsFetchingAudio] = useState(false); // Loading state when fetching from S3
   const [selectedSurah, setSelectedSurah] = useState<number | null>(null);
-  const [detectedSurah, setDetectedSurah] = useState<number | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcriptionProgress, setTranscriptionProgress] = useState({
     current: 0,
@@ -88,7 +98,6 @@ export default function AudioUploader() {
   const [isLoadingFFmpeg, setIsLoadingFFmpeg] = useState(false);
   const [endPadding, setEndPadding] = useState(0.3);
   const [startPadding, setStartPadding] = useState(0);
-  const [isDetectingSilence, setIsDetectingSilence] = useState(false);
   const [silenceThreshold, setSilenceThreshold] = useState(0.04);
   const [minSilenceDuration, setMinSilenceDuration] = useState(0.2);
   const [isFetchingText, setIsFetchingText] = useState(false);
@@ -109,6 +118,11 @@ export default function AudioUploader() {
     segments: { start: number; end: number; text: string }[];
     text: string;
   } | null>(null);
+
+  // Token management state
+  const [showCostDialog, setShowCostDialog] = useState(false);
+  const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
+  const [tokenBalance, setTokenBalance] = useState<number>(0);
 
   // Save function for Supabase only
   const saveProjectUniversal = async (projectData: SavedProject) => {
@@ -135,6 +149,8 @@ export default function AudioUploader() {
     console.log("✅ Saved to Supabase:", projectData.id);
   };
 
+  // UNUSED - Legacy function (keeping for reference)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file && file.type === "audio/mpeg") {
@@ -197,7 +213,6 @@ export default function AudioUploader() {
         setSelectedSegmentIndex(null);
 
         const detected = detectSurahFromFilename(file.name);
-        setDetectedSurah(detected);
 
         if (detected) {
           setSelectedSurah(detected);
@@ -394,6 +409,29 @@ export default function AudioUploader() {
     loadProject();
   }, [projectId, user, loadAudioFromS3]);
 
+  // Load user's token balance
+  useEffect(() => {
+    const loadTokenBalance = async () => {
+      if (!user) {
+        setTokenBalance(0);
+        return;
+      }
+
+      try {
+        const balance = await getUserTokenBalance(user.id);
+        setTokenBalance(balance.balanceTokens);
+        console.log("💰 Token balance loaded:", balance.balanceTokens);
+      } catch (error) {
+        console.error("❌ Failed to load token balance:", error);
+        setTokenBalance(0);
+      }
+    };
+
+    loadTokenBalance();
+  }, [user]);
+
+  // UNUSED - Legacy function (keeping for reference)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleButtonClick = () => {
     fileInputRef.current?.click();
   };
@@ -605,6 +643,8 @@ export default function AudioUploader() {
   };
 
   // Helper function to chunk large audio files using FFmpeg
+  // UNUSED - Legacy function (keeping for reference)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const chunkAudioFile = async (
     file: File
   ): Promise<{ chunks: File[]; chunkUrls: string[] }> => {
@@ -761,7 +801,7 @@ export default function AudioUploader() {
   };
 
   const handleTranscribe = async (forceRefresh = false) => {
-    if (!selectedSurah) return;
+    if (!selectedSurah || !user) return;
 
     // Determine which transcription to use
     const cachedTranscription = forceRefresh ? null : whisperTranscription;
@@ -770,6 +810,82 @@ export default function AudioUploader() {
     if (!cachedTranscription && !audioFile) {
       alert("Please upload an audio file first.");
       return;
+    }
+
+    // 💰 STEP 1: Show cost estimation dialog (only if we need to run Whisper)
+    if (!cachedTranscription) {
+      try {
+        // Calculate rough audio duration estimate
+        const audioSizeMB = audioFile!.size / (1024 * 1024);
+        const estimatedAudioMinutes = audioSizeMB / 0.5; // Rough estimate: 1MB ≈ 2 minutes of MP3
+        const estimatedAyahs =
+          SURAHS.find((s) => s.number === selectedSurah)?.ayahs || 0;
+
+        const estimate = estimateTranscriptionCost({
+          audioDurationMinutes: estimatedAudioMinutes,
+          audioSizeMB,
+          estimatedAyahs,
+        });
+
+        setCostEstimate(estimate);
+        setShowCostDialog(true);
+
+        // Wait for user confirmation
+        const confirmed = await new Promise<boolean>((resolve) => {
+          // Create a one-time event listener for user response
+          const handler = (e: CustomEvent) => {
+            resolve(e.detail.confirmed);
+          };
+          window.addEventListener(
+            "cost-dialog-response",
+            handler as EventListener,
+            { once: true }
+          );
+
+          // Set a timeout to auto-reject after 5 minutes
+          setTimeout(() => {
+            resolve(false);
+          }, 300000);
+        });
+
+        setShowCostDialog(false);
+
+        if (!confirmed) {
+          console.log("❌ User cancelled transcription");
+          return;
+        }
+
+        // Check token balance
+        if (tokenBalance < estimate.totalTokens) {
+          alert(
+            `Insufficient tokens!\n\nYou need ${estimate.totalTokens} tokens but only have ${tokenBalance}.\n\nPlease purchase more tokens to continue.`
+          );
+          return;
+        }
+
+        // Reserve tokens by deducting them upfront
+        console.log(
+          `💰 Reserving ${estimate.totalTokens} tokens for transcription...`
+        );
+        await reserveTokens(
+          user.id,
+          estimate.totalTokens,
+          `Reserved for ${
+            SURAHS.find((s) => s.number === selectedSurah)?.name
+          }`,
+          { surahNumber: selectedSurah, projectId: currentProjectId }
+        );
+        setTokenBalance((prev) => prev - estimate.totalTokens);
+        console.log(
+          `✅ Tokens reserved. New balance: ${
+            tokenBalance - estimate.totalTokens
+          }`
+        );
+      } catch (error) {
+        console.error("❌ Failed to process cost estimation:", error);
+        alert("Failed to process cost estimation. Please try again.");
+        return;
+      }
     }
 
     setIsTranscribing(true);
@@ -843,12 +959,21 @@ export default function AudioUploader() {
 
         finalTranscription = data.transcription;
 
+        // 💰 Store Lambda usage data for cost calculation later
+        const lambdaUsage = data.usage || {};
+        console.log("📊 Lambda usage data:", lambdaUsage);
+
         console.log(
           `🎉 Whisper complete! Total: ${
             finalTranscription?.segments?.length || 0
           } segments`
         );
         setWhisperTranscription(finalTranscription);
+
+        // Store usage data in a variable we can access later
+        (
+          window as unknown as { __whisperUsageData: typeof lambdaUsage }
+        ).__whisperUsageData = lambdaUsage;
 
         // Save Whisper transcription
         if (currentProjectId && finalTranscription && user) {
@@ -909,11 +1034,95 @@ export default function AudioUploader() {
           throw new Error(`AI mapping failed: ${mappingData.error}`);
         }
 
+        // 💰 Capture GPT usage data
+        const gptUsage = mappingData.usage || {
+          inputTokens: 0,
+          outputTokens: 0,
+        };
+        console.log("📊 GPT usage data:", gptUsage);
+
         if (mappingData.segments) {
           allMappedSegments.push(...mappingData.segments);
           console.log(
             `✅ AI mapping complete! Got ${mappingData.segments.length} segments`
           );
+
+          // 💰 STEP 2: Calculate actual cost and record usage (only if we ran Whisper)
+          if (!cachedTranscription && currentProjectId) {
+            try {
+              const whisperUsage =
+                (
+                  window as unknown as {
+                    __whisperUsageData?: {
+                      audioDurationSeconds?: number;
+                      audioSizeBytes?: number;
+                      lambdaExecutionMs?: number;
+                      whisperSegmentCount?: number;
+                    };
+                  }
+                ).__whisperUsageData || {};
+
+              // Build actual usage object
+              const actualUsage = {
+                audioDurationSeconds: whisperUsage.audioDurationSeconds || 0,
+                audioSizeBytes: whisperUsage.audioSizeBytes || 0,
+                whisperSegmentsCount: finalTranscription?.segments?.length || 0,
+                gpt5InputTokens: gptUsage.inputTokens || 0,
+                gpt5OutputTokens: gptUsage.outputTokens || 0,
+                lambdaExecutionMs: whisperUsage.lambdaExecutionMs || 0,
+              };
+
+              console.log(
+                "💰 Calculating actual cost from usage:",
+                actualUsage
+              );
+              const actualCost = calculateActualCost(actualUsage);
+              console.log("💰 Actual cost breakdown:", actualCost);
+
+              // Record usage in database
+              await recordTranscriptionUsage(
+                user.id,
+                currentProjectId,
+                actualCost,
+                actualUsage
+              );
+
+              console.log("✅ Usage recorded in database");
+
+              // If actual cost is different from estimate, handle refund/additional charge
+              if (
+                costEstimate &&
+                costEstimate.totalTokens !== actualCost.totalTokens
+              ) {
+                const difference =
+                  costEstimate.totalTokens - actualCost.totalTokens;
+                if (difference > 0) {
+                  console.log(
+                    `💰 Refunding ${difference} tokens (estimate was higher than actual)`
+                  );
+                  // TODO: Implement refund logic
+                } else if (difference < 0) {
+                  console.log(
+                    `⚠️ Actual cost exceeded estimate by ${Math.abs(
+                      difference
+                    )} tokens`
+                  );
+                  // This shouldn't happen often, but if it does, we've already reserved enough
+                }
+              }
+
+              // Update token balance display
+              const newBalance = await getUserTokenBalance(user.id);
+              setTokenBalance(newBalance.balanceTokens);
+
+              // Clean up temporary storage
+              delete (window as unknown as { __whisperUsageData?: unknown })
+                .__whisperUsageData;
+            } catch (error) {
+              console.error("❌ Failed to record usage:", error);
+              // Don't throw - the transcription succeeded, just usage recording failed
+            }
+          }
 
           // Save after mapping
           setOriginalSegments(allMappedSegments);
@@ -1031,6 +1240,8 @@ export default function AudioUploader() {
     await handleTranscribe(true);
   };
 
+  // UNUSED - Legacy function (keeping for reference)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleSilenceDetection = async () => {
     // Ensure audio file is loaded
     const file = await ensureAudioFileLoaded();
@@ -1039,7 +1250,6 @@ export default function AudioUploader() {
       return;
     }
 
-    setIsDetectingSilence(true);
     setSegments([]);
     setOriginalSegments([]);
 
@@ -1069,8 +1279,6 @@ export default function AudioUploader() {
       }
     } catch (error) {
       console.error("Silence detection failed:", error);
-    } finally {
-      setIsDetectingSilence(false);
     }
   };
 
@@ -2171,6 +2379,33 @@ export default function AudioUploader() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 💰 Cost Estimation Dialog */}
+      {costEstimate && (
+        <CostEstimationDialog
+          open={showCostDialog}
+          onOpenChange={setShowCostDialog}
+          estimate={costEstimate}
+          currentBalance={tokenBalance}
+          onConfirm={() => {
+            setShowCostDialog(false);
+            window.dispatchEvent(
+              new CustomEvent("cost-dialog-response", {
+                detail: { confirmed: true },
+              })
+            );
+          }}
+          onCancel={() => {
+            setShowCostDialog(false);
+            window.dispatchEvent(
+              new CustomEvent("cost-dialog-response", {
+                detail: { confirmed: false },
+              })
+            );
+          }}
+          surahName={SURAHS.find((s) => s.number === selectedSurah)?.name}
+        />
+      )}
     </div>
   );
 }

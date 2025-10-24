@@ -34,6 +34,7 @@ CREATE POLICY "Users can update own profile"
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
+  -- Create user profile
   INSERT INTO public.profiles (id, email, full_name, avatar_url)
   VALUES (
     new.id,
@@ -41,6 +42,20 @@ BEGIN
     new.raw_user_meta_data->>'full_name',
     new.raw_user_meta_data->>'avatar_url'
   );
+
+  -- Grant signup bonus (50 tokens = $0.50)
+  PERFORM add_tokens(
+    new.id,
+    50,
+    'signup_bonus',
+    'Welcome bonus - 50 free tokens ($0.50)',
+    jsonb_build_object(
+      'source', 'signup',
+      'email', new.email,
+      'triggered_at', NOW()
+    )
+  );
+
   RETURN new;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
