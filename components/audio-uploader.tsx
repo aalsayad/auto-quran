@@ -33,11 +33,7 @@ import { splitAudioIntoAyahs, loadFFmpeg } from "@/lib/audio-splitter";
 import { detectSilenceSegments } from "@/lib/silence-detector";
 import { fetchSurahText } from "@/lib/quran-api";
 import WaveformEditor from "@/components/waveform-editor";
-import {
-  getProject,
-  renameProject,
-  type SavedProject,
-} from "@/lib/library-storage";
+import type { SavedProject } from "@/lib/types";
 import { useAuth } from "@/contexts/auth-context";
 import { getRecitation, updateRecitation } from "@/lib/supabase-storage";
 import {
@@ -114,31 +110,29 @@ export default function AudioUploader() {
     text: string;
   } | null>(null);
 
-  // Universal save function that works with both Supabase and localStorage
+  // Save function for Supabase only
   const saveProjectUniversal = async (projectData: SavedProject) => {
-    if (user) {
-      // Save to Supabase for authenticated users
-      const recitationData = savedProjectToRecitation(projectData, user.id);
-      await updateRecitation(projectData.id, {
-        ...recitationData,
-        transcription_data: {
-          segments: projectData.segments,
-          ayah_texts: projectData.ayahTexts,
-          whisper: projectData.whisperTranscription,
-        },
-        settings_data: {
-          silence_threshold: projectData.silenceThreshold,
-          min_silence_duration: projectData.minSilenceDuration,
-          end_padding: projectData.endPadding,
-          start_padding: projectData.startPadding,
-        },
-      });
-      console.log("✅ Saved to Supabase:", projectData.id);
-    } else {
-      // Save to localStorage for non-authenticated users
-      await saveProjectUniversal(projectData);
-      console.log("✅ Saved to localStorage:", projectData.id);
+    if (!user) {
+      throw new Error("User must be authenticated to save projects");
     }
+
+    // Save to Supabase
+    const recitationData = savedProjectToRecitation(projectData, user.id);
+    await updateRecitation(projectData.id, {
+      ...recitationData,
+      transcription_data: {
+        segments: projectData.segments,
+        ayah_texts: projectData.ayahTexts,
+        whisper: projectData.whisperTranscription,
+      },
+      settings_data: {
+        silence_threshold: projectData.silenceThreshold,
+        min_silence_duration: projectData.minSilenceDuration,
+        end_padding: projectData.endPadding,
+        start_padding: projectData.startPadding,
+      },
+    });
+    console.log("✅ Saved to Supabase:", projectData.id);
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -295,25 +289,23 @@ export default function AudioUploader() {
   useEffect(() => {
     const loadProject = async () => {
       if (!projectId) return;
+      if (!user) {
+        alert("Please sign in to access this project");
+        return;
+      }
 
       console.log("Loading project:", projectId);
 
-      let project: SavedProject | null = null;
-
-      if (user) {
-        // Try loading from Supabase
-        const recitation = await getRecitation(projectId);
-        if (recitation) {
-          project = recitationToSavedProject(recitation);
-          console.log("Project loaded from Supabase:", project);
-        }
-      } else {
-        // Try loading from localStorage
-        project = getProject(projectId);
-        if (project) {
-          console.log("Project loaded from localStorage:", project);
-        }
+      // Load from Supabase
+      const recitation = await getRecitation(projectId);
+      if (!recitation) {
+        console.log("Project not found for ID:", projectId);
+        alert("Project not found. It may have been deleted.");
+        return;
       }
+
+      const project = recitationToSavedProject(recitation);
+      console.log("Project loaded from Supabase:", project);
 
       if (project) {
         // Load project data
@@ -349,9 +341,6 @@ export default function AudioUploader() {
             project.fileName || project.audioFileName || "audio.mp3"
           );
         }
-      } else {
-        console.log("Project not found for ID:", projectId);
-        alert("Project not found. It may have been deleted.");
       }
     };
 
@@ -507,7 +496,20 @@ export default function AudioUploader() {
 
     try {
       const surahInfo = SURAHS.find((s) => s.number === selectedSurah);
-      const isUpdating = !!currentProjectId;
+      if (!user) {
+        alert("Please sign in to save projects");
+        return;
+      }
+
+      // Get existing project data for dates
+      let existingCreatedAt = new Date().toISOString();
+      if (currentProjectId) {
+        const existing = await getRecitation(currentProjectId);
+        if (existing) {
+          existingCreatedAt = existing.created_at;
+        }
+      }
+
       const project: SavedProject = {
         id: currentProjectId || `project-${Date.now()}`,
         name: projectName.trim(),
@@ -515,13 +517,8 @@ export default function AudioUploader() {
         audioUrl: audioUrl || "", // Save S3 URL
         surahNumber: selectedSurah,
         surahName: surahInfo?.transliteration || `Surah ${selectedSurah}`,
-        dateCreated: currentProjectId
-          ? getProject(currentProjectId)?.dateCreated ||
-            new Date().toISOString()
-          : new Date().toISOString(),
-        createdAt: currentProjectId
-          ? getProject(currentProjectId)?.createdAt || new Date().toISOString()
-          : new Date().toISOString(),
+        dateCreated: existingCreatedAt,
+        createdAt: existingCreatedAt,
         lastModified: new Date().toISOString(),
         segments,
         ayahTexts,
@@ -531,6 +528,8 @@ export default function AudioUploader() {
         startPadding,
         whisperTranscription: whisperTranscription || undefined, // Cache Whisper transcription
       };
+
+      const isUpdating = !!currentProjectId;
 
       await saveProjectUniversal(project);
       setCurrentProjectId(project.id);
@@ -563,11 +562,15 @@ export default function AudioUploader() {
     }
   };
 
-  const handleRename = () => {
-    if (!currentProjectId || !newProjectName.trim()) return;
+  const handleRename = async () => {
+    if (!currentProjectId || !newProjectName.trim() || !user) return;
 
     try {
-      renameProject(currentProjectId, newProjectName.trim());
+      // Update reciter_name in Supabase
+      const newReciterName = newProjectName.trim().split(" - ")[0];
+      await updateRecitation(currentProjectId, {
+        reciter_name: newReciterName,
+      });
       setProjectName(newProjectName.trim());
       setShowRenameDialog(false);
       setNewProjectName("");
@@ -778,12 +781,15 @@ export default function AudioUploader() {
         console.log(`🚀 Calling Lambda for transcription...`);
         console.log(`🔗 Audio URL: ${audioUrl}`);
 
-        // 🚀 Simple Lambda call - Lambda handles everything
+        // 🚀 Using Lambda Function URL (15-minute timeout, no API Gateway 30s limit!)
         const response = await fetch(
-          "https://hzmc716qdh.execute-api.eu-north-1.amazonaws.com/default/auto-quran-transcribe-chunk/auto-quran-transcribe-chunk-api",
+          "https://ecwm5k4fe5epg4ng52at2gyhva0aqkjz.lambda-url.eu-north-1.on.aws/",
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": process.env.NEXT_PUBLIC_LAMBDA_API_KEY || "",
+            },
             body: JSON.stringify({
               audioUrl: audioUrl,
               surahNumber: selectedSurah,
@@ -793,8 +799,12 @@ export default function AudioUploader() {
 
         const data = await response.json();
 
-        if (!response.ok || data.error) {
-          throw new Error(data.error || "Transcription failed");
+        // Check for success flag (Lambda always returns 200, error details in body)
+        if (!data.success) {
+          console.error("❌ Lambda error details:", data);
+          throw new Error(
+            data.error || data.details?.message || "Transcription failed"
+          );
         }
 
         if (!data.transcription) {
@@ -811,17 +821,11 @@ export default function AudioUploader() {
         setWhisperTranscription(finalTranscription);
 
         // Save Whisper transcription
-        if (currentProjectId && finalTranscription) {
-          let existingProject: SavedProject | null = null;
-
-          if (user) {
-            const recitation = await getRecitation(currentProjectId);
-            existingProject = recitation
-              ? recitationToSavedProject(recitation)
-              : null;
-          } else {
-            existingProject = getProject(currentProjectId);
-          }
+        if (currentProjectId && finalTranscription && user) {
+          const recitation = await getRecitation(currentProjectId);
+          const existingProject = recitation
+            ? recitationToSavedProject(recitation)
+            : null;
 
           if (existingProject) {
             await saveProjectUniversal({
@@ -883,17 +887,11 @@ export default function AudioUploader() {
 
           // Save after mapping
           setOriginalSegments(allMappedSegments);
-          if (currentProjectId) {
-            let existingProject: SavedProject | null = null;
-
-            if (user) {
-              const recitation = await getRecitation(currentProjectId);
-              existingProject = recitation
-                ? recitationToSavedProject(recitation)
-                : null;
-            } else {
-              existingProject = getProject(currentProjectId);
-            }
+          if (currentProjectId && user) {
+            const recitation = await getRecitation(currentProjectId);
+            const existingProject = recitation
+              ? recitationToSavedProject(recitation)
+              : null;
 
             if (existingProject) {
               await saveProjectUniversal({
@@ -920,10 +918,11 @@ export default function AudioUploader() {
 
         setOriginalSegments(allMappedSegments);
 
-        // IMMEDIATELY save to localStorage (don't wait for user to click Save!)
-        if (currentProjectId) {
-          const existingProject = getProject(currentProjectId);
-          if (existingProject) {
+        // IMMEDIATELY save to Supabase (don't wait for user to click Save!)
+        if (currentProjectId && user) {
+          const recitation = await getRecitation(currentProjectId);
+          if (recitation) {
+            const existingProject = recitationToSavedProject(recitation);
             const updatedProject = {
               ...existingProject,
               segments: allMappedSegments,
@@ -932,7 +931,7 @@ export default function AudioUploader() {
             };
             await saveProjectUniversal(updatedProject);
             console.log(
-              `✅ Auto-saved to localStorage: ${allMappedSegments.length} segments + Whisper cache`
+              `✅ Auto-saved to Supabase: ${allMappedSegments.length} segments + Whisper cache`
             );
           }
         }
@@ -984,10 +983,11 @@ export default function AudioUploader() {
     // Clear cached Whisper transcription from state
     setWhisperTranscription(null);
 
-    // Clear from localStorage immediately
-    if (currentProjectId) {
-      const existingProject = getProject(currentProjectId);
-      if (existingProject) {
+    // Clear from Supabase immediately
+    if (currentProjectId && user) {
+      const recitation = await getRecitation(currentProjectId);
+      if (recitation) {
+        const existingProject = recitationToSavedProject(recitation);
         await saveProjectUniversal({
           ...existingProject,
           whisperTranscription: undefined,
@@ -1016,10 +1016,11 @@ export default function AudioUploader() {
 
       setOriginalSegments(detectedSegments);
 
-      // IMMEDIATELY save to localStorage (don't wait for user to click Save!)
-      if (currentProjectId) {
-        const existingProject = getProject(currentProjectId);
-        if (existingProject) {
+      // IMMEDIATELY save to Supabase (don't wait for user to click Save!)
+      if (currentProjectId && user) {
+        const recitation = await getRecitation(currentProjectId);
+        if (recitation) {
+          const existingProject = recitationToSavedProject(recitation);
           const updatedProject = {
             ...existingProject,
             segments: detectedSegments,
@@ -1027,7 +1028,7 @@ export default function AudioUploader() {
           };
           await saveProjectUniversal(updatedProject);
           console.log(
-            `✅ Auto-saved ${detectedSegments.length} silence-detected segments to localStorage`
+            `✅ Auto-saved ${detectedSegments.length} silence-detected segments to Supabase`
           );
         }
       }

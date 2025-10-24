@@ -10,13 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  getAllProjects,
-  deleteProject,
-  renameProject,
-  exportProjectAsJSON,
-  type SavedProject,
-} from "@/lib/library-storage";
+import type { SavedProject } from "@/lib/types";
 import CreateProjectDialog from "@/components/create-project-dialog";
 import Navbar from "@/components/navbar";
 import { useAuth } from "@/contexts/auth-context";
@@ -68,28 +62,21 @@ export default function LibraryPage() {
   const loadProjects = async () => {
     setLoading(true);
     try {
-      if (user) {
-        // Load from Supabase for authenticated users
-        const recitations = await getRecitations(user.id);
-        const projectsData = recitations.map(recitationToSavedProject);
-        // Sort by last modified date (newest first)
-        projectsData.sort(
-          (a, b) =>
-            new Date(b.lastModified).getTime() -
-            new Date(a.lastModified).getTime()
-        );
-        setProjects(projectsData);
-      } else {
-        // Load from localStorage for non-authenticated users
-        const allProjects = getAllProjects();
-        // Sort by last modified date (newest first)
-        allProjects.sort(
-          (a, b) =>
-            new Date(b.lastModified).getTime() -
-            new Date(a.lastModified).getTime()
-        );
-        setProjects(allProjects);
+      if (!user) {
+        setProjects([]);
+        return;
       }
+
+      // Load from Supabase
+      const recitations = await getRecitations(user.id);
+      const projectsData = recitations.map(recitationToSavedProject);
+      // Sort by last modified date (newest first)
+      projectsData.sort(
+        (a, b) =>
+          new Date(b.lastModified).getTime() -
+          new Date(a.lastModified).getTime()
+      );
+      setProjects(projectsData);
     } catch (error) {
       console.error("❌ [Library] Error loading projects:", error);
     } finally {
@@ -134,15 +121,14 @@ export default function LibraryPage() {
         console.log("ℹ️  [Library] No audio URL found, skipping S3 deletion");
       }
 
-      if (user) {
-        // Delete from Supabase for authenticated users
-        await deleteRecitation(projectId);
-        console.log("✅ [Library] Recitation deleted from Supabase");
-      } else {
-        // Delete from localStorage for non-authenticated users
-        deleteProject(projectId);
-        console.log("✅ [Library] Project deleted from localStorage");
+      if (!user) {
+        alert("Please sign in to delete projects");
+        return;
       }
+
+      // Delete from Supabase
+      await deleteRecitation(projectId);
+      console.log("✅ [Library] Recitation deleted from Supabase");
 
       loadProjects();
       console.log("✅ [Library] Project deleted successfully");
@@ -153,7 +139,16 @@ export default function LibraryPage() {
   };
 
   const handleExport = (project: SavedProject) => {
-    exportProjectAsJSON(project);
+    const dataStr = JSON.stringify(project, null, 2);
+    const dataBlob = new Blob([dataStr], { type: "application/json" });
+    const url = URL.createObjectURL(dataBlob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${project.name.replace(/[^a-z0-9]/gi, "-")}-${
+      new Date().toISOString().split("T")[0]
+    }.json`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleOpenRename = (projectId: string) => {
@@ -169,18 +164,17 @@ export default function LibraryPage() {
     if (!renameProjectId || !newProjectName.trim()) return;
 
     try {
-      if (user) {
-        // Update in Supabase (update reciter_name)
-        const newReciterName = newProjectName.trim().split(" - ")[0];
-        await updateRecitation(renameProjectId, {
-          reciter_name: newReciterName,
-        });
-        console.log("✅ [Library] Recitation renamed in Supabase");
-      } else {
-        // Update in localStorage
-        renameProject(renameProjectId, newProjectName.trim());
-        console.log("✅ [Library] Project renamed in localStorage");
+      if (!user) {
+        alert("Please sign in to rename projects");
+        return;
       }
+
+      // Update in Supabase (update reciter_name)
+      const newReciterName = newProjectName.trim().split(" - ")[0];
+      await updateRecitation(renameProjectId, {
+        reciter_name: newReciterName,
+      });
+      console.log("✅ [Library] Recitation renamed in Supabase");
 
       loadProjects();
       setShowRenameDialog(false);
@@ -226,7 +220,15 @@ export default function LibraryPage() {
           </Button>
         </div>
 
-        {loading ? (
+        {!user ? (
+          <Card>
+            <CardContent className="flex flex-col items-center justify-center py-12">
+              <p className="text-lg text-muted-foreground mb-4">
+                Please sign in to view and manage your projects
+              </p>
+            </CardContent>
+          </Card>
+        ) : loading ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground">
@@ -238,9 +240,7 @@ export default function LibraryPage() {
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground mb-4">
-                {user
-                  ? "No saved projects yet"
-                  : "Sign in to save your projects"}
+                No saved projects yet
               </p>
               <Button
                 onClick={() => setShowCreateDialog(true)}

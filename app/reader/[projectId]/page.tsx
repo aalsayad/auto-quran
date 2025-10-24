@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { getProject, type SavedProject } from "@/lib/library-storage";
+import type { SavedProject } from "@/lib/types";
 import { SURAHS } from "@/lib/surah-data";
 import { useAuth } from "@/contexts/auth-context";
 import { getRecitation } from "@/lib/supabase-storage";
@@ -130,22 +130,20 @@ export default function QuranReaderPage() {
   // Load project
   useEffect(() => {
     const loadProjectData = async () => {
-      let loadedProject: SavedProject | null = null;
-
-      if (user) {
-        // Try loading from Supabase
-        const recitation = await getRecitation(projectId);
-        if (recitation) {
-          loadedProject = recitationToSavedProject(recitation);
-          console.log("Project loaded from Supabase for reader");
-        }
-      } else {
-        // Try loading from localStorage
-        loadedProject = getProject(projectId);
-        if (loadedProject) {
-          console.log("Project loaded from localStorage for reader");
-        }
+      if (!user) {
+        alert("Please sign in to access this project");
+        return;
       }
+
+      // Load from Supabase
+      const recitation = await getRecitation(projectId);
+      if (!recitation) {
+        alert("Project not found. It may have been deleted.");
+        return;
+      }
+
+      const loadedProject = recitationToSavedProject(recitation);
+      console.log("Project loaded from Supabase for reader");
 
       if (loadedProject) {
         setProject(loadedProject);
@@ -208,8 +206,6 @@ export default function QuranReaderPage() {
             console.error("❌ Failed to load Mushaf verses:", error);
             setMushafVerses([]);
           });
-      } else {
-        alert("Project not found. It may have been deleted.");
       }
     };
 
