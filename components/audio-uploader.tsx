@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Card,
@@ -285,12 +285,54 @@ export default function AudioUploader() {
     }
   }, [segments, ayahTexts]);
 
+  // Fetch audio file from S3 URL and convert to File object (lazy loading)
+  const loadAudioFromS3 = useCallback(
+    async (url: string, fileName: string) => {
+      // If we already have the audio file loaded, don't fetch again
+      if (audioFile && audioFile.name === fileName) {
+        console.log("✅ [Load] Audio already loaded, skipping fetch");
+        return audioFile;
+      }
+
+      try {
+        setIsFetchingAudio(true);
+        console.log("📥 [Load] Fetching audio from S3:", url);
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch audio from S3");
+        }
+
+        const blob = await response.blob();
+        const file = new File([blob], fileName, { type: "audio/mpeg" });
+
+        console.log(
+          "✅ [Load] Audio loaded from S3:",
+          file.name,
+          (file.size / 1024 / 1024).toFixed(2),
+          "MB"
+        );
+        setAudioFile(file);
+        return file;
+      } catch (error) {
+        console.error("❌ [Load] Failed to load audio from S3:", error);
+        alert(
+          "Failed to load audio from cloud storage. Please upload the file again."
+        );
+        return null;
+      } finally {
+        setIsFetchingAudio(false);
+      }
+    },
+    [audioFile]
+  );
+
   // Load project from URL params
   useEffect(() => {
     const loadProject = async () => {
       if (!projectId) return;
       if (!user) {
-        alert("Please sign in to access this project");
+        console.log("⏳ Waiting for user authentication...");
         return;
       }
 
@@ -333,57 +375,27 @@ export default function AudioUploader() {
         if (project.audioUrl) {
           setAudioUrl(project.audioUrl);
           console.log("📂 [Project] Audio URL found:", project.audioUrl);
-          // Don't fetch the file immediately - we'll fetch it only when needed
-          // (for transcription, silence detection, or splitting)
-          // The WaveformEditor can play directly from the S3 URL
+
+          // Auto-load audio ONLY if there are segments (waveform needs it)
+          // This way we don't fetch on every navigation, only when necessary
+          if (project.segments && project.segments.length > 0) {
+            console.log(
+              "🎵 [Project] Has segments, auto-loading audio for waveform..."
+            );
+            loadAudioFromS3(
+              project.audioUrl,
+              project.fileName || project.audioFileName || "audio.mp3"
+            );
+          }
         }
       }
     };
 
     loadProject();
-  }, [projectId, user]);
+  }, [projectId, user, loadAudioFromS3]);
 
   const handleButtonClick = () => {
     fileInputRef.current?.click();
-  };
-
-  // Fetch audio file from S3 URL and convert to File object (lazy loading)
-  const loadAudioFromS3 = async (url: string, fileName: string) => {
-    // If we already have the audio file loaded, don't fetch again
-    if (audioFile && audioFile.name === fileName) {
-      console.log("✅ [Load] Audio already loaded, skipping fetch");
-      return audioFile;
-    }
-
-    try {
-      setIsFetchingAudio(true);
-      console.log("📥 [Load] Fetching audio from S3:", url);
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch audio from S3");
-      }
-
-      const blob = await response.blob();
-      const file = new File([blob], fileName, { type: "audio/mpeg" });
-
-      console.log(
-        "✅ [Load] Audio loaded from S3:",
-        file.name,
-        (file.size / 1024 / 1024).toFixed(2),
-        "MB"
-      );
-      setAudioFile(file);
-      return file;
-    } catch (error) {
-      console.error("❌ [Load] Failed to load audio from S3:", error);
-      alert(
-        "Failed to load audio from cloud storage. Please upload the file again."
-      );
-      return null;
-    } finally {
-      setIsFetchingAudio(false);
-    }
   };
 
   // Helper to ensure audio file is loaded (lazy loading)
@@ -1309,6 +1321,18 @@ export default function AudioUploader() {
 
   const hasText = ayahTexts.length > 0;
 
+  // Show loading state while waiting for auth or project data
+  if (projectId && !user) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+          <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
+          <p className="text-muted-foreground">Loading project...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="w-full max-w-4xl mx-auto">
@@ -1387,6 +1411,37 @@ export default function AudioUploader() {
               <div className="text-sm text-blue-600 dark:text-blue-400 p-3 bg-blue-50 dark:bg-blue-950 rounded-md flex items-center gap-2">
                 <div className="animate-spin h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full"></div>
                 Uploading to cloud storage...
+              </div>
+            )}
+
+            {/* Show "Load Audio" prompt when audio URL exists but file not loaded */}
+            {audioUrl && !audioFile && !isFetchingAudio && (
+              <div className="space-y-3 p-4 border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950 rounded-md">
+                <div className="flex items-start gap-3">
+                  <FiAlertCircle
+                    className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0"
+                    size={20}
+                  />
+                  <div className="flex-1 space-y-2">
+                    <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                      Audio file in cloud storage
+                    </p>
+                    <p className="text-xs text-amber-700 dark:text-amber-300">
+                      Load the audio file to start Whisper AI detection or view
+                      the waveform.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  onClick={() =>
+                    loadAudioFromS3(audioUrl, projectName || "audio.mp3")
+                  }
+                  variant="outline"
+                  size="sm"
+                  className="cursor-pointer w-full border-amber-300 dark:border-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900"
+                >
+                  Load Audio File
+                </Button>
               </div>
             )}
 
