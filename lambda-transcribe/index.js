@@ -4,8 +4,9 @@ const {
   PutObjectCommand,
   DeleteObjectCommand,
 } = require("@aws-sdk/client-s3");
+const { createClient } = require("@supabase/supabase-js");
 const { spawn } = require("child_process");
-const { writeFileSync, unlinkSync, readFileSync } = require("fs");
+const { writeFileSync, unlinkSync, readFileSync, readdirSync, existsSync } = require("fs");
 const { randomUUID } = require("crypto");
 const path = require("path");
 
@@ -14,17 +15,53 @@ const s3Client = new S3Client({
   region: process.env.AWS_REGION || "eu-north-1",
 });
 
-const corsHeaders = {
+// Initialize Supabase client for JWT authentication
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
+
+// ✅ FIXED: Simple headers (CORS handled by Function URL)
+const responseHeaders = {
   "Content-Type": "application/json",
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "OPTIONS,POST,GET",
-  "Access-Control-Allow-Headers":
-    "Content-Type,Accept,Origin,X-Requested-With,Authorization",
 };
 
-const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24MB (leaving margin below Whisper's 25MB limit)
-const CHUNK_DURATION_SECONDS = 600; // 10 minutes per chunk
+const MAX_FILE_SIZE = 24 * 1024 * 1024; // 24MB (Whisper limit)
+const TARGET_CHUNK_SIZE = 20 * 1024 * 1024; // 20MB target per chunk
 const S3_BUCKET = process.env.S3_BUCKET || "quran-splitter";
+
+/**
+ * Clean up all old files in /tmp directory
+ * This prevents memory buildup from previous Lambda invocations
+ */
+function cleanupTempDirectory() {
+  const tempDir = "/tmp";
+  try {
+    const files = readdirSync(tempDir);
+    let cleanedCount = 0;
+
+    for (const file of files) {
+      // Only clean up our files (audio and chunks), not Lambda system files
+      if (file.includes("input-") || file.includes("chunk-")) {
+        const filePath = path.join(tempDir, file);
+        try {
+          unlinkSync(filePath);
+          cleanedCount++;
+        } catch (err) {
+          // File might be in use or already deleted, ignore
+          console.log(`⚠️  Could not delete ${file}: ${err.message}`);
+        }
+      }
+    }
+
+    if (cleanedCount > 0) {
+      console.log(`🧹 Cleaned up ${cleanedCount} old temp files from /tmp`);
+    }
+  } catch (error) {
+    console.error("⚠️  Error cleaning /tmp:", error.message);
+    // Don't fail the request if cleanup fails
+  }
+}
 
 /**
  * Downloads audio from S3 and returns buffer
@@ -62,18 +99,46 @@ async function getAudioDuration(audioPath) {
     ]);
 
     let output = "";
+    let errorOutput = "";
+
     ffprobe.stdout.on("data", (data) => {
       output += data.toString();
     });
 
+    ffprobe.stderr.on("data", (data) => {
+      errorOutput += data.toString();
+    });
+
     ffprobe.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error("Failed to get audio duration"));
+        reject(new Error(`ffprobe failed (code ${code}): ${errorOutput}`));
       } else {
         resolve(parseFloat(output.trim()));
       }
     });
   });
+}
+
+/**
+ * Calculate optimal chunk duration based on file size
+ * Goal: minimize chunks while keeping each under 20MB
+ */
+function calculateOptimalChunkDuration(fileSize, totalDuration) {
+  // Calculate minimum number of chunks needed
+  const minChunks = Math.ceil(fileSize / TARGET_CHUNK_SIZE);
+
+  // Calculate duration per chunk to achieve minimum chunks
+  const chunkDuration = totalDuration / minChunks;
+
+  console.log(`📊 File size: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`⏱️  Total duration: ${totalDuration.toFixed(2)} seconds`);
+  console.log(
+    `🎯 Optimal chunks: ${minChunks} (${(chunkDuration / 60).toFixed(
+      2
+    )} min each)`
+  );
+
+  return { numChunks: minChunks, chunkDuration };
 }
 
 /**
@@ -87,57 +152,74 @@ async function splitAudioIntoChunks(audioBuffer, fileName) {
   console.log(`📁 Writing audio to temp: ${inputPath}`);
   writeFileSync(inputPath, audioBuffer);
 
-  // Get audio duration
-  const duration = await getAudioDuration(inputPath);
-  console.log(`⏱️  Audio duration: ${duration.toFixed(2)} seconds`);
+  try {
+    // Get audio duration
+    const duration = await getAudioDuration(inputPath);
 
-  // Calculate number of chunks needed
-  const numChunks = Math.ceil(duration / CHUNK_DURATION_SECONDS);
-  console.log(
-    `📦 Will split into ${numChunks} chunks (${CHUNK_DURATION_SECONDS}s each)`
-  );
+    // Calculate optimal chunking
+    const { numChunks, chunkDuration } = calculateOptimalChunkDuration(
+      audioBuffer.length,
+      duration
+    );
 
-  const chunkPaths = [];
+    const chunkPaths = [];
 
-  // Split audio using ffmpeg
-  for (let i = 0; i < numChunks; i++) {
-    const startTime = i * CHUNK_DURATION_SECONDS;
-    const chunkPath = path.join(tempDir, `${chunkPrefix}-${i}.mp3`);
+    // Split audio using ffmpeg
+    for (let i = 0; i < numChunks; i++) {
+      const startTime = i * chunkDuration;
+      const chunkPath = path.join(tempDir, `${chunkPrefix}-${i}.mp3`);
 
-    await new Promise((resolve, reject) => {
-      const ffmpeg = spawn("ffmpeg", [
-        "-i",
-        inputPath,
-        "-ss",
-        startTime.toString(),
-        "-t",
-        CHUNK_DURATION_SECONDS.toString(),
-        "-acodec",
-        "copy",
-        "-y",
-        chunkPath,
-      ]);
+      await new Promise((resolve, reject) => {
+        const ffmpeg = spawn("ffmpeg", [
+          "-i",
+          inputPath,
+          "-ss",
+          startTime.toString(),
+          "-t",
+          chunkDuration.toString(),
+          "-acodec",
+          "copy",
+          "-y",
+          chunkPath,
+        ]);
 
-      ffmpeg.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(`ffmpeg failed for chunk ${i}`));
-        } else {
-          console.log(`✅ Created chunk ${i + 1}/${numChunks}: ${chunkPath}`);
-          chunkPaths.push(chunkPath);
-          resolve();
-        }
+        let errorOutput = "";
+
+        ffmpeg.stderr.on("data", (data) => {
+          errorOutput += data.toString();
+        });
+
+        ffmpeg.on("close", (code) => {
+          if (code !== 0) {
+            reject(new Error(`ffmpeg failed for chunk ${i}: ${errorOutput}`));
+          } else {
+            const chunkSize = readFileSync(chunkPath).length;
+            console.log(
+              `✅ Created chunk ${i + 1}/${numChunks}: ${(
+                chunkSize /
+                1024 /
+                1024
+              ).toFixed(2)} MB`
+            );
+            chunkPaths.push(chunkPath);
+            resolve();
+          }
+        });
       });
+    }
 
-      ffmpeg.stderr.on("data", (data) => {
-        // Suppress ffmpeg output unless there's an error
-      });
-    });
+    return { chunkPaths, duration, chunkDuration };
+  } finally {
+    // Always clean up input file, even on error
+    try {
+      if (existsSync(inputPath)) {
+        unlinkSync(inputPath);
+        console.log(`🗑️  Cleaned up input file: ${inputPath}`);
+      }
+    } catch (error) {
+      console.error(`⚠️  Could not delete input file: ${error.message}`);
+    }
   }
-
-  // Clean up input file
-  unlinkSync(inputPath);
-
-  return { chunkPaths, duration };
 }
 
 /**
@@ -232,13 +314,13 @@ async function transcribeWithChunking(audioBuffer, fileName) {
   // File is too large, need to chunk
   console.log("⚠️  File exceeds 24MB, will chunk and transcribe...");
 
-  const { chunkPaths, duration } = await splitAudioIntoChunks(
+  const { chunkPaths, duration, chunkDuration } = await splitAudioIntoChunks(
     audioBuffer,
     fileName
   );
-  const chunkDuration = duration / chunkPaths.length;
 
   const tempS3Keys = []; // Track S3 keys for cleanup
+  const localChunkPaths = [...chunkPaths]; // Track local files for cleanup
   const allSegments = [];
   let fullText = "";
 
@@ -270,8 +352,13 @@ async function transcribeWithChunking(audioBuffer, fileName) {
       allSegments.push(...result.segments);
       fullText += (fullText ? " " : "") + result.text;
 
-      // Clean up local chunk file
-      unlinkSync(chunkPath);
+      // Clean up local chunk file immediately after use
+      try {
+        unlinkSync(chunkPath);
+        console.log(`🗑️  Deleted local chunk: ${chunkPath}`);
+      } catch (err) {
+        console.error(`⚠️  Could not delete ${chunkPath}:`, err.message);
+      }
 
       console.log(
         `✅ Chunk ${i + 1}/${chunkPaths.length} complete (${
@@ -289,7 +376,7 @@ async function transcribeWithChunking(audioBuffer, fileName) {
       text: fullText,
     };
   } finally {
-    // GUARANTEED CLEANUP: Delete all temp chunks from S3
+    // GUARANTEED CLEANUP: Delete all temp chunks from S3 and local files
     console.log(
       `\n🗑️  Cleaning up ${tempS3Keys.length} temp chunks from S3...`
     );
@@ -300,26 +387,84 @@ async function transcribeWithChunking(audioBuffer, fileName) {
         console.error(`⚠️  Failed to delete ${key}:`, error.message);
       }
     }
+
+    // Also clean up any remaining local chunk files (in case of error)
+    console.log(`🗑️  Cleaning up local chunk files...`);
+    for (const chunkPath of localChunkPaths) {
+      try {
+        if (existsSync(chunkPath)) {
+          unlinkSync(chunkPath);
+          console.log(`🗑️  Deleted local chunk: ${chunkPath}`);
+        }
+      } catch (error) {
+        console.error(`⚠️  Could not delete ${chunkPath}:`, error.message);
+      }
+    }
+
     console.log("✅ Cleanup complete!");
   }
 }
 
 /**
- * Main Lambda handler
+ * Main Lambda handler with API KEY authentication
+ * ALWAYS RETURNS 200 WITH ERROR IN BODY
  */
 exports.handler = async (event) => {
-  console.log("📥 Received event:", JSON.stringify(event, null, 2));
+  console.log("📥 Received request");
+
+  // 🧹 CRITICAL: Clean up /tmp from previous invocations to prevent memory buildup
+  cleanupTempDirectory();
 
   // Handle CORS preflight
   if (event.requestContext?.http?.method === "OPTIONS") {
     return {
       statusCode: 200,
-      headers: corsHeaders,
+      headers: responseHeaders,
       body: JSON.stringify({ ok: true }),
     };
   }
 
   try {
+    // 🔐 JWT AUTHENTICATION with Supabase
+    const authHeader =
+      event.headers?.authorization || event.headers?.Authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      console.log("❌ Missing or invalid authorization header");
+      return {
+        statusCode: 200,
+        headers: responseHeaders,
+        body: JSON.stringify({
+          success: false,
+          error: "Missing authentication token. Please log in.",
+          errorType: "AuthError",
+        }),
+      };
+    }
+
+    const token = authHeader.replace("Bearer ", "");
+
+    // Validate JWT token with Supabase
+    const {
+      data: { user },
+      error,
+    } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      console.log("❌ Invalid or expired token:", error?.message);
+      return {
+        statusCode: 200,
+        headers: responseHeaders,
+        body: JSON.stringify({
+          success: false,
+          error: "Unauthorized. Please log in again.",
+          errorType: "AuthError",
+        }),
+      };
+    }
+
+    console.log(`✅ Authenticated user: ${user.email} (${user.id})`);
+
     // Parse request body
     let body;
     if (event.body) {
@@ -342,7 +487,8 @@ exports.handler = async (event) => {
     console.log(`🔗 Audio URL: ${audioUrl}`);
 
     // Step 1: Download audio from S3
-    const audioBuffer = await downloadAudioFromS3(audioUrl);
+    let audioBuffer = await downloadAudioFromS3(audioUrl);
+    const fileSize = audioBuffer.length; // Save size before nulling buffer
 
     // Step 2: Transcribe (with automatic chunking if needed)
     const transcriptionResult = await transcribeWithChunking(
@@ -350,36 +496,52 @@ exports.handler = async (event) => {
       audioUrl.split("/").pop() || "audio.mp3"
     );
 
+    // 🧹 Help garbage collection: Clear large buffer reference
+    audioBuffer = null;
+
     // Step 3: Return result
     console.log(
       `🎉 Success! Total segments: ${transcriptionResult.segments.length}`
     );
 
-    return {
+    const response = {
       statusCode: 200,
-      headers: corsHeaders,
+      headers: responseHeaders,
       body: JSON.stringify({
         success: true,
         transcription: transcriptionResult,
         metadata: {
           surahNumber,
-          fileSize: audioBuffer.length,
+          fileSize: fileSize,
           segmentCount: transcriptionResult.segments.length,
         },
       }),
     };
+
+    console.log("📤 Returning response to client");
+    return response;
   } catch (error) {
     console.error("❌ Transcription error:", error);
     console.error("❌ Error stack:", error.stack);
 
     return {
-      statusCode: 500,
-      headers: corsHeaders,
+      statusCode: 200,
+      headers: responseHeaders,
       body: JSON.stringify({
         success: false,
         error: error.message || "Transcription failed",
-        details: error.stack,
+        errorType: error.name || "Error",
+        stack: error.stack,
+        details: {
+          message: error.message,
+          name: error.name,
+          cause: error.cause,
+        },
       }),
     };
+  } finally {
+    // 🧹 Final cleanup before Lambda exits (whether success or error)
+    console.log("🧹 Final cleanup before Lambda exit...");
+    cleanupTempDirectory();
   }
 };

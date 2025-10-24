@@ -68,7 +68,7 @@ interface Segment {
 export default function AudioUploader() {
   const params = useParams();
   const projectId = params.projectId as string;
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null); // S3 URL for uploaded audio
   const [isUploading, setIsUploading] = useState(false);
@@ -801,6 +801,13 @@ export default function AudioUploader() {
           message: "Transcribing with Whisper (AWS Lambda)...",
         });
 
+        // Check authentication before calling Lambda
+        if (!session?.access_token) {
+          throw new Error(
+            "You must be logged in to transcribe audio. Please log in and try again."
+          );
+        }
+
         console.log(`🚀 Calling Lambda for transcription...`);
         console.log(`🔗 Audio URL: ${audioUrl}`);
 
@@ -811,7 +818,7 @@ export default function AudioUploader() {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "X-API-Key": process.env.NEXT_PUBLIC_LAMBDA_API_KEY || "",
+              Authorization: `Bearer ${session.access_token}`,
             },
             body: JSON.stringify({
               audioUrl: audioUrl,
