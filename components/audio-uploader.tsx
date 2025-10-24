@@ -333,13 +333,9 @@ export default function AudioUploader() {
         if (project.audioUrl) {
           setAudioUrl(project.audioUrl);
           console.log("📂 [Project] Audio URL found:", project.audioUrl);
-          console.log("🔄 [Project] Loading audio file from S3...");
-
-          // Fetch the audio file from S3 and set it as audioFile
-          loadAudioFromS3(
-            project.audioUrl,
-            project.fileName || project.audioFileName || "audio.mp3"
-          );
+          // Don't fetch the file immediately - we'll fetch it only when needed
+          // (for transcription, silence detection, or splitting)
+          // The WaveformEditor can play directly from the S3 URL
         }
       }
     };
@@ -351,8 +347,14 @@ export default function AudioUploader() {
     fileInputRef.current?.click();
   };
 
-  // Fetch audio file from S3 URL and convert to File object
+  // Fetch audio file from S3 URL and convert to File object (lazy loading)
   const loadAudioFromS3 = async (url: string, fileName: string) => {
+    // If we already have the audio file loaded, don't fetch again
+    if (audioFile && audioFile.name === fileName) {
+      console.log("✅ [Load] Audio already loaded, skipping fetch");
+      return audioFile;
+    }
+
     try {
       setIsFetchingAudio(true);
       console.log("📥 [Load] Fetching audio from S3:", url);
@@ -382,6 +384,15 @@ export default function AudioUploader() {
     } finally {
       setIsFetchingAudio(false);
     }
+  };
+
+  // Helper to ensure audio file is loaded (lazy loading)
+  const ensureAudioFileLoaded = async (): Promise<File | null> => {
+    if (audioFile) return audioFile;
+    if (!audioUrl) return null;
+
+    const fileName = projectName || "audio.mp3";
+    return await loadAudioFromS3(audioUrl, fileName);
   };
 
   const uploadAudioToS3 = async (file: File): Promise<string | null> => {
@@ -1002,14 +1013,19 @@ export default function AudioUploader() {
   };
 
   const handleSilenceDetection = async () => {
-    if (!audioFile) return;
+    // Ensure audio file is loaded
+    const file = await ensureAudioFileLoaded();
+    if (!file) {
+      alert("Please load the audio file first.");
+      return;
+    }
 
     setIsDetectingSilence(true);
     setSegments([]);
     setOriginalSegments([]);
 
     try {
-      const detectedSegments = await detectSilenceSegments(audioFile, {
+      const detectedSegments = await detectSilenceSegments(file, {
         minSilenceDuration,
         silenceThreshold,
       });
@@ -1234,7 +1250,14 @@ export default function AudioUploader() {
   };
 
   const handleDownload = async () => {
-    if (!audioFile || !selectedSurah || segments.length === 0) return;
+    if (!selectedSurah || segments.length === 0) return;
+
+    // Ensure audio file is loaded
+    const file = await ensureAudioFileLoaded();
+    if (!file) {
+      alert("Please load the audio file first.");
+      return;
+    }
 
     try {
       setIsLoadingFFmpeg(true);
@@ -1257,7 +1280,7 @@ export default function AudioUploader() {
       }));
 
       const zipBlob = await splitAudioIntoAyahs(
-        audioFile,
+        file,
         paddedSegments,
         selectedSurah
       );
@@ -1563,7 +1586,7 @@ export default function AudioUploader() {
         </Card>
       </div>
 
-      {segments.length > 0 && audioFile && (
+      {segments.length > 0 && (
         <div className="mt-6">
           <Card>
             <CardHeader>
@@ -1609,32 +1632,63 @@ export default function AudioUploader() {
                 </div>
               )}
 
-              <div className="space-y-2">
-                <Label htmlFor="end-padding" className="text-sm font-medium">
-                  Padding (Start & End): {endPadding.toFixed(2)}s
-                </Label>
-                <input
-                  id="end-padding"
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.05"
-                  value={endPadding}
-                  onChange={(e) => setEndPadding(parseFloat(e.target.value))}
-                  className="w-full cursor-pointer"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Extra time added to downloads (not shown on waveform)
-                </p>
-              </div>
+              {!audioFile && audioUrl && (
+                <div className="p-6 bg-muted rounded-lg flex flex-col items-center justify-center gap-4">
+                  <FiAlertCircle size={32} className="text-muted-foreground" />
+                  <div className="text-center space-y-2">
+                    <p className="text-sm font-medium">Audio file not loaded</p>
+                    <p className="text-xs text-muted-foreground">
+                      Load the audio file to view and edit the waveform
+                    </p>
+                  </div>
+                  <Button
+                    onClick={() =>
+                      loadAudioFromS3(audioUrl, projectName || "audio.mp3")
+                    }
+                    disabled={isFetchingAudio}
+                    size="sm"
+                    className="cursor-pointer"
+                  >
+                    {isFetchingAudio ? "Loading..." : "Load Audio File"}
+                  </Button>
+                </div>
+              )}
 
-              <WaveformEditor
-                audioFile={audioFile}
-                segments={segments}
-                onSegmentsChange={setSegments}
-                selectedSurahAyahCount={selectedSurahInfo?.ayahs}
-                onSegmentSelect={setSelectedSegmentIndex}
-              />
+              {audioFile && (
+                <>
+                  <div className="space-y-2">
+                    <Label
+                      htmlFor="end-padding"
+                      className="text-sm font-medium"
+                    >
+                      Padding (Start & End): {endPadding.toFixed(2)}s
+                    </Label>
+                    <input
+                      id="end-padding"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={endPadding}
+                      onChange={(e) =>
+                        setEndPadding(parseFloat(e.target.value))
+                      }
+                      className="w-full cursor-pointer"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Extra time added to downloads (not shown on waveform)
+                    </p>
+                  </div>
+
+                  <WaveformEditor
+                    audioFile={audioFile}
+                    segments={segments}
+                    onSegmentsChange={setSegments}
+                    selectedSurahAyahCount={selectedSurahInfo?.ayahs}
+                    onSegmentSelect={setSelectedSegmentIndex}
+                  />
+                </>
+              )}
 
               {selectedSegmentIndex !== null && ayahTexts.length > 0 && (
                 <Card className="border-primary/50 bg-primary/5">

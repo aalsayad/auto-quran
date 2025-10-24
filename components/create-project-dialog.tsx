@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Dialog,
@@ -31,10 +31,11 @@ import {
   FiCloud,
   FiUser,
   FiBook,
+  FiPlus,
 } from "react-icons/fi";
-import type { FinalSegment } from "@/lib/types";
+import type { FinalSegment, UserReciter } from "@/lib/types";
 import { useAuth } from "@/contexts/auth-context";
-import { createRecitation } from "@/lib/supabase-storage";
+import { createRecitation, getReciters } from "@/lib/supabase-storage";
 
 interface CreateProjectDialogProps {
   open: boolean;
@@ -54,14 +55,72 @@ export default function CreateProjectDialog({
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [reciterName, setReciterName] = useState("");
+  const [selectedReciterId, setSelectedReciterId] = useState<string>("");
+  const [existingReciters, setExistingReciters] = useState<UserReciter[]>([]);
+  const [isLoadingReciters, setIsLoadingReciters] = useState(false);
   const [selectedSurah, setSelectedSurah] = useState<number | null>(null);
   const [detectedSurah, setDetectedSurah] = useState<number | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [jsonFile, setJsonFile] = useState<File | null>(null);
   const [segments, setSegments] = useState<FinalSegment[]>([]);
   const [surahSearch, setSurahSearch] = useState("");
+  const [reciterSearch, setReciterSearch] = useState("");
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showAddReciterModal, setShowAddReciterModal] = useState(false);
+  const [newReciterInput, setNewReciterInput] = useState("");
+
+  // Load existing reciters when dialog opens
+  useEffect(() => {
+    const loadReciters = async () => {
+      if (!user) return;
+
+      setIsLoadingReciters(true);
+      try {
+        const reciters = await getReciters(user.id);
+        setExistingReciters(reciters);
+        console.log("✅ [Create] Loaded reciters:", reciters.length);
+      } catch (error) {
+        console.error("❌ [Create] Failed to load reciters:", error);
+      } finally {
+        setIsLoadingReciters(false);
+      }
+    };
+
+    if (open && user) {
+      loadReciters();
+    }
+  }, [open, user]);
+
+  // When reciter is selected from dropdown
+  const handleReciterSelect = (value: string) => {
+    if (value === "new") {
+      // Open modal to add new reciter
+      setShowAddReciterModal(true);
+      setNewReciterInput("");
+    } else {
+      // User selected an existing reciter
+      const reciter = existingReciters.find((r) => r.id === value);
+      if (reciter) {
+        setSelectedReciterId(reciter.id);
+        setReciterName(reciter.name);
+      }
+    }
+  };
+
+  // Handle adding a new reciter from the modal
+  const handleAddNewReciter = () => {
+    if (!newReciterInput.trim()) {
+      alert("Please enter a reciter name");
+      return;
+    }
+
+    // Set the new reciter name and mark as new
+    setReciterName(newReciterInput.trim());
+    setSelectedReciterId("new");
+    setShowAddReciterModal(false);
+    setNewReciterInput("");
+  };
 
   const handleJsonSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -206,11 +265,6 @@ export default function CreateProjectDialog({
       // Initialize project with uploaded audio
       const surahInfo = SURAHS.find((s) => s.number === selectedSurah);
 
-      // Auto-generate project name: "Reciter - Surah Name"
-      const projectName = `${reciterName.trim()} - ${
-        surahInfo?.transliteration || `Surah ${selectedSurah}`
-      }`;
-
       if (!user) {
         alert("Please sign in to create a project");
         return;
@@ -290,6 +344,7 @@ export default function CreateProjectDialog({
     setAudioFile(null);
     setAudioUrl(null);
     setReciterName("");
+    setSelectedReciterId("");
     setSelectedSurah(null);
     setDetectedSurah(null);
     setIsUploading(false);
@@ -297,6 +352,7 @@ export default function CreateProjectDialog({
     setJsonFile(null);
     setSegments([]);
     setSurahSearch("");
+    setReciterSearch("");
     setShowCloseConfirm(false);
   };
 
@@ -478,31 +534,108 @@ export default function CreateProjectDialog({
                 </Select>
               </div>
 
-              {/* Step 3: Reciter Name (shown after surah selected) */}
+              {/* Step 3: Reciter Selection/Input (shown after surah selected) */}
               {selectedSurah && (
                 <>
                   <div className="space-y-2">
-                    <Label htmlFor="reciter-name">Reciter Name</Label>
-                    <Input
-                      id="reciter-name"
-                      placeholder="e.g., Sheikh Mishary Rashid Alafasy"
-                      value={reciterName}
-                      onChange={(e) => setReciterName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && reciterName.trim()) {
-                          handleCreate();
-                        }
-                      }}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      Project will be named:{" "}
-                      {reciterName.trim()
-                        ? `${reciterName.trim()} - ${
-                            SURAHS.find((s) => s.number === selectedSurah)
-                              ?.transliteration
-                          }`
-                        : "Reciter - Surah Name"}
-                    </p>
+                    <Label htmlFor="reciter">Reciter</Label>
+
+                    {/* Show loading state */}
+                    {isLoadingReciters && (
+                      <div className="text-sm text-muted-foreground flex items-center gap-2 p-3 bg-muted rounded-md">
+                        <div className="animate-spin h-4 w-4 border-2 border-primary border-t-transparent rounded-full"></div>
+                        Loading your reciters...
+                      </div>
+                    )}
+
+                    {/* Show reciter selector when loaded */}
+                    {!isLoadingReciters && (
+                      <>
+                        <Select
+                          value={selectedReciterId || ""}
+                          onValueChange={handleReciterSelect}
+                        >
+                          <SelectTrigger id="reciter" className="w-full">
+                            <SelectValue placeholder="Select a reciter">
+                              {reciterName || "Select a reciter"}
+                            </SelectValue>
+                          </SelectTrigger>
+                          <SelectContent className="max-h-[400px]">
+                            {existingReciters.length > 0 && (
+                              <div className="sticky top-0 bg-background p-2 border-b z-10">
+                                <Input
+                                  placeholder="Search reciters..."
+                                  value={reciterSearch}
+                                  onChange={(e) =>
+                                    setReciterSearch(e.target.value)
+                                  }
+                                  className="h-8"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => e.stopPropagation()}
+                                />
+                              </div>
+                            )}
+                            <div className="overflow-y-auto max-h-[260px]">
+                              <SelectItem
+                                value="new"
+                                className="font-semibold text-primary"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <FiPlus /> Add New Reciter
+                                </div>
+                              </SelectItem>
+                              {existingReciters.length > 0 && (
+                                <div className="border-t my-1" />
+                              )}
+                              {existingReciters
+                                .filter((reciter) => {
+                                  if (!reciterSearch) return true;
+                                  const search = reciterSearch.toLowerCase();
+                                  return reciter.name
+                                    .toLowerCase()
+                                    .includes(search);
+                                })
+                                .map((reciter) => (
+                                  <SelectItem
+                                    key={reciter.id}
+                                    value={reciter.id}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <FiUser className="text-muted-foreground" />
+                                      {reciter.name}
+                                    </div>
+                                  </SelectItem>
+                                ))}
+                              {existingReciters.filter((reciter) => {
+                                if (!reciterSearch) return true;
+                                const search = reciterSearch.toLowerCase();
+                                return reciter.name
+                                  .toLowerCase()
+                                  .includes(search);
+                              }).length === 0 &&
+                                reciterSearch && (
+                                  <div className="p-4 text-sm text-muted-foreground text-center">
+                                    No reciters found
+                                  </div>
+                                )}
+                            </div>
+                          </SelectContent>
+                        </Select>
+
+                        {reciterName && (
+                          <p className="text-xs text-muted-foreground">
+                            Project will be named:{" "}
+                            <span className="font-medium">
+                              {reciterName.trim()} -{" "}
+                              {
+                                SURAHS.find((s) => s.number === selectedSurah)
+                                  ?.transliteration
+                              }
+                            </span>
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
 
                   {/* Divider */}
@@ -684,6 +817,55 @@ export default function CreateProjectDialog({
               ) : (
                 "Delete & Close"
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal for Adding New Reciter */}
+      <Dialog open={showAddReciterModal} onOpenChange={setShowAddReciterModal}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <FiPlus /> Add New Reciter
+            </DialogTitle>
+            <DialogDescription>
+              Enter the name of the reciter for this project
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="new-reciter-name">Reciter Name</Label>
+              <Input
+                id="new-reciter-name"
+                placeholder="e.g., Sheikh Mishary Rashid Alafasy"
+                value={newReciterInput}
+                onChange={(e) => setNewReciterInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && newReciterInput.trim()) {
+                    handleAddNewReciter();
+                  }
+                }}
+                autoFocus
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowAddReciterModal(false)}
+              className="cursor-pointer"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleAddNewReciter}
+              disabled={!newReciterInput.trim()}
+              className="cursor-pointer gap-2"
+            >
+              <FiCheckCircle /> Add Reciter
             </Button>
           </DialogFooter>
         </DialogContent>
