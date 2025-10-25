@@ -1319,8 +1319,8 @@ export default function QuranReaderPage() {
 
         {/* Recitation Header */}
         <div className="container mx-auto px-4 py-3 sm:py-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
-            <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-3">
+            <div className="flex-1 min-w-0">
               <h1 className="text-lg sm:text-2xl font-bold truncate">
                 {recitation.name}
               </h1>
@@ -1331,14 +1331,15 @@ export default function QuranReaderPage() {
               </p>
             </div>
 
-            {/* Edit Button */}
+            {/* Edit Button - Icon Only */}
             <Link href={`/editor/${recitation.id}`}>
               <Button
                 variant="outline"
-                className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                size="icon"
+                className="cursor-pointer h-9 w-9 shrink-0"
+                title="Edit Recitation"
               >
-                <FiEdit className="h-3 w-3 sm:h-4 sm:w-4" />
-                <span>Edit</span>
+                <FiEdit className="h-4 w-4" />
               </Button>
             </Link>
           </div>
