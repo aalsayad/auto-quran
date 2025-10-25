@@ -55,13 +55,21 @@ export default function Navbar() {
               Auto Quran
             </h1>
           </Link>
-          <div className="flex items-center gap-2 sm:gap-4">
+          <div className="flex items-center gap-1 sm:gap-2">
             <Link href="/library">
               <Button
                 variant="ghost"
-                className="cursor-pointer gap-1 sm:gap-2 text-sm sm:text-base px-2 sm:px-3 py-1 sm:py-2"
+                className="cursor-pointer text-sm sm:text-base px-2 sm:px-3 py-1 sm:py-2 h-auto"
               >
                 Library
+              </Button>
+            </Link>
+            <Link href="/mushaf">
+              <Button
+                variant="ghost"
+                className="cursor-pointer text-sm sm:text-base px-2 sm:px-3 py-1 sm:py-2 h-auto"
+              >
+                Mushaf
               </Button>
             </Link>
 
@@ -105,17 +113,25 @@ export default function Navbar() {
                       <Coins className="h-4 w-4 text-primary" />
                       <div className="flex-1 flex items-baseline gap-2">
                         {loadingTokens ? (
-                          <span className="text-sm text-muted-foreground">Loading...</span>
+                          <span className="text-sm text-muted-foreground">
+                            Loading...
+                          </span>
                         ) : tokenBalance !== null ? (
                           <>
-                            <span className="text-sm font-semibold">{tokenBalance}</span>
-                            <span className="text-xs text-muted-foreground">tokens</span>
+                            <span className="text-sm font-semibold">
+                              {tokenBalance}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              tokens
+                            </span>
                             <span className="text-xs text-muted-foreground ml-auto">
                               ${(tokenBalance * 0.01).toFixed(2)}
                             </span>
                           </>
                         ) : (
-                          <span className="text-sm text-muted-foreground">--</span>
+                          <span className="text-sm text-muted-foreground">
+                            --
+                          </span>
                         )}
                       </div>
                     </div>

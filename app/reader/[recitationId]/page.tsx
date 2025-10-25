@@ -124,7 +124,12 @@ export default function QuranReaderPage() {
 
   // Save current position to localStorage whenever currentAyahNumbers changes
   useEffect(() => {
-    if (typeof window === "undefined" || !recitationId || currentAyahNumbers.length === 0) return;
+    if (
+      typeof window === "undefined" ||
+      !recitationId ||
+      currentAyahNumbers.length === 0
+    )
+      return;
 
     const positionKey = `quran-reader-position-${recitationId}`;
     localStorage.setItem(
@@ -227,7 +232,9 @@ export default function QuranReaderPage() {
         if (loadedRecitation.audioUrl) {
           loadAudioFromS3(
             loadedRecitation.audioUrl,
-            loadedRecitation.fileName || loadedRecitation.audioFileName || "audio.mp3"
+            loadedRecitation.fileName ||
+              loadedRecitation.audioFileName ||
+              "audio.mp3"
           );
         }
 
@@ -278,15 +285,27 @@ export default function QuranReaderPage() {
 
                 // Find the segment for the saved ayah
                 const segment = loadedRecitation.segments.find(
-                  (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
-                    seg.ayahNumbers?.some((num: number) => ayahNumbers.includes(num)) ||
-                    (seg.ayahNumber !== undefined && ayahNumbers.includes(seg.ayahNumber))
+                  (seg: {
+                    ayahNumbers?: number[];
+                    ayahNumber?: number;
+                    start: number;
+                  }) =>
+                    seg.ayahNumbers?.some((num: number) =>
+                      ayahNumbers.includes(num)
+                    ) ||
+                    (seg.ayahNumber !== undefined &&
+                      ayahNumbers.includes(seg.ayahNumber))
                 );
 
                 if (segment) {
                   setSavedAyahNumbers(ayahNumbers);
                   savedPositionTimeRef.current = segment.start;
-                  console.log("📍 [Reader] Found saved position:", ayahNumbers, "at time:", segment.start);
+                  console.log(
+                    "📍 [Reader] Found saved position:",
+                    ayahNumbers,
+                    "at time:",
+                    segment.start
+                  );
                 } else {
                   console.log("⚠️ [Reader] Saved position segment not found");
                 }
@@ -297,14 +316,21 @@ export default function QuranReaderPage() {
 
             // Load bookmarks from Supabase
             if (user) {
-              getRecitationBookmarks(user.id, recitationId).then((bookmarks) => {
-                setBookmarkedAyahs(bookmarks);
-                console.log("🔖 [Reader] Loaded bookmarks:", bookmarks);
-              });
-              getRecitationBookmarksDetailed(user.id, recitationId).then((detailedBookmarks) => {
-                setBookmarksDetailed(detailedBookmarks);
-                console.log("🔖 [Reader] Loaded detailed bookmarks:", detailedBookmarks);
-              });
+              getRecitationBookmarks(user.id, recitationId).then(
+                (bookmarks) => {
+                  setBookmarkedAyahs(bookmarks);
+                  console.log("🔖 [Reader] Loaded bookmarks:", bookmarks);
+                }
+              );
+              getRecitationBookmarksDetailed(user.id, recitationId).then(
+                (detailedBookmarks) => {
+                  setBookmarksDetailed(detailedBookmarks);
+                  console.log(
+                    "🔖 [Reader] Loaded detailed bookmarks:",
+                    detailedBookmarks
+                  );
+                }
+              );
             }
           }
         });
@@ -433,8 +459,17 @@ export default function QuranReaderPage() {
     if (!audioRef.current) return;
 
     // Restore saved position if available (only once)
-    if (!hasRestoredPositionRef.current && savedPositionTimeRef.current > 0 && savedAyahNumbers.length > 0) {
-      console.log("📍 [Reader] Attempting to restore position to:", savedAyahNumbers, "at time:", savedPositionTimeRef.current);
+    if (
+      !hasRestoredPositionRef.current &&
+      savedPositionTimeRef.current > 0 &&
+      savedAyahNumbers.length > 0
+    ) {
+      console.log(
+        "📍 [Reader] Attempting to restore position to:",
+        savedAyahNumbers,
+        "at time:",
+        savedPositionTimeRef.current
+      );
 
       // Mark as restored FIRST to prevent multiple attempts
       hasRestoredPositionRef.current = true;
@@ -449,7 +484,9 @@ export default function QuranReaderPage() {
 
       // Scroll to the saved ayah after a short delay
       setTimeout(() => {
-        const ayahIndex = ayahs.findIndex((a) => savedAyahNumbers.includes(a.numberInSurah));
+        const ayahIndex = ayahs.findIndex((a) =>
+          savedAyahNumbers.includes(a.numberInSurah)
+        );
         if (ayahIndex >= 0 && ayahRefs.current[ayahIndex]) {
           ayahRefs.current[ayahIndex]?.scrollIntoView({
             behavior: "smooth",
@@ -465,12 +502,22 @@ export default function QuranReaderPage() {
     if (!audioRef.current) return;
 
     // If we've restored the position and user hasn't interacted yet, enforce the saved position
-    if (hasRestoredPositionRef.current && !isPlaying && savedPositionTimeRef.current > 0) {
+    if (
+      hasRestoredPositionRef.current &&
+      !isPlaying &&
+      savedPositionTimeRef.current > 0
+    ) {
       const currentTime = audioRef.current.currentTime;
 
       // If something tries to seek away from our saved position (like back to 0), prevent it
-      if (Math.abs(currentTime - savedPositionTimeRef.current) > 0.5 && currentTime < 1) {
-        console.log("🛡️ [Reader] Prevented unwanted seek, restoring to:", savedPositionTimeRef.current);
+      if (
+        Math.abs(currentTime - savedPositionTimeRef.current) > 0.5 &&
+        currentTime < 1
+      ) {
+        console.log(
+          "🛡️ [Reader] Prevented unwanted seek, restoring to:",
+          savedPositionTimeRef.current
+        );
         audioRef.current.currentTime = savedPositionTimeRef.current;
       }
     }
@@ -482,7 +529,10 @@ export default function QuranReaderPage() {
         audioRef.current.pause();
       } else {
         // Before playing, ensure we're at the saved position if it hasn't been restored yet
-        if (!hasRestoredPositionRef.current && savedPositionTimeRef.current > 0) {
+        if (
+          !hasRestoredPositionRef.current &&
+          savedPositionTimeRef.current > 0
+        ) {
           audioRef.current.currentTime = savedPositionTimeRef.current;
           setCurrentAyahNumbers(savedAyahNumbers);
           hasRestoredPositionRef.current = true;
@@ -501,7 +551,11 @@ export default function QuranReaderPage() {
   }, [isPlaying, savedAyahNumbers]);
 
   const handleEnded = () => {
-    if (isLoopingAyah && recitation?.segments && currentAyahNumbers.length > 0) {
+    if (
+      isLoopingAyah &&
+      recitation?.segments &&
+      currentAyahNumbers.length > 0
+    ) {
       const currentSegment = recitation.segments.find(
         (seg: {
           ayahNumbers?: number[];
@@ -700,7 +754,9 @@ export default function QuranReaderPage() {
     if (isBookmarked) {
       setBookmarkedAyahs(bookmarkedAyahs.filter((num) => num !== ayahNumber));
     } else {
-      setBookmarkedAyahs([...bookmarkedAyahs, ayahNumber].sort((a, b) => a - b));
+      setBookmarkedAyahs(
+        [...bookmarkedAyahs, ayahNumber].sort((a, b) => a - b)
+      );
     }
 
     // Update in Supabase
@@ -714,16 +770,20 @@ export default function QuranReaderPage() {
     if (!result.success) {
       // Revert on error
       if (isBookmarked) {
-        setBookmarkedAyahs([...bookmarkedAyahs, ayahNumber].sort((a, b) => a - b));
+        setBookmarkedAyahs(
+          [...bookmarkedAyahs, ayahNumber].sort((a, b) => a - b)
+        );
       } else {
         setBookmarkedAyahs(bookmarkedAyahs.filter((num) => num !== ayahNumber));
       }
       console.error("Failed to toggle bookmark:", result.error);
     } else {
       // Reload detailed bookmarks after successful update
-      getRecitationBookmarksDetailed(user.id, recitationId).then((detailedBookmarks) => {
-        setBookmarksDetailed(detailedBookmarks);
-      });
+      getRecitationBookmarksDetailed(user.id, recitationId).then(
+        (detailedBookmarks) => {
+          setBookmarksDetailed(detailedBookmarks);
+        }
+      );
     }
   };
 
@@ -769,7 +829,9 @@ export default function QuranReaderPage() {
     // Scroll to the saved ayah
     if (savedAyahNumbers.length > 0) {
       const firstSavedAyah = savedAyahNumbers[0];
-      const ayahIndex = ayahs.findIndex((a) => a.numberInSurah === firstSavedAyah);
+      const ayahIndex = ayahs.findIndex(
+        (a) => a.numberInSurah === firstSavedAyah
+      );
       if (ayahIndex >= 0 && ayahRefs.current[ayahIndex]) {
         ayahRefs.current[ayahIndex]?.scrollIntoView({
           behavior: "smooth",
@@ -910,10 +972,13 @@ export default function QuranReaderPage() {
                       className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
                     >
                       <FiMoreVertical className="h-3 w-3 sm:h-4 sm:w-4" />
-                      <span className="hidden sm:inline">Menu</span>
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-64" sideOffset={8}>
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-64"
+                    sideOffset={8}
+                  >
                     <DropdownMenuLabel>Actions</DropdownMenuLabel>
                     <DropdownMenuSeparator />
 
@@ -932,7 +997,9 @@ export default function QuranReaderPage() {
                         onClick={() => setShowTranslation(!showTranslation)}
                       >
                         <FiBook className="mr-2 h-4 w-4" />
-                        <span>{showTranslation ? "Hide" : "Show"} Translation</span>
+                        <span>
+                          {showTranslation ? "Hide" : "Show"} Translation
+                        </span>
                       </DropdownMenuItem>
                     )}
 
@@ -970,13 +1037,17 @@ export default function QuranReaderPage() {
                             <DropdownMenuItem
                               key={bookmark.id}
                               className="cursor-pointer"
-                              onClick={() => handleJumpToAyah(bookmark.ayah_number)}
+                              onClick={() =>
+                                handleJumpToAyah(bookmark.ayah_number)
+                              }
                             >
                               <FiBookmark className="mr-2 h-4 w-4 text-purple-500 fill-current" />
                               <div className="flex flex-col">
                                 <span>Ayah {bookmark.ayah_number}</span>
                                 <span className="text-xs text-muted-foreground">
-                                  {new Date(bookmark.created_at).toLocaleDateString("en-US", {
+                                  {new Date(
+                                    bookmark.created_at
+                                  ).toLocaleDateString("en-US", {
                                     month: "short",
                                     day: "numeric",
                                     year: "numeric",
@@ -1039,9 +1110,9 @@ export default function QuranReaderPage() {
                 const isActive = currentAyahNumbers.includes(
                   ayah.numberInSurah
                 );
-                const isSavedPosition = savedAyahNumbers.includes(
-                  ayah.numberInSurah
-                ) && showSavedIndicator;
+                const isSavedPosition =
+                  savedAyahNumbers.includes(ayah.numberInSurah) &&
+                  showSavedIndicator;
                 const isBookmarked = bookmarkedAyahs.includes(
                   ayah.numberInSurah
                 );
@@ -1057,7 +1128,11 @@ export default function QuranReaderPage() {
                     border-b border-border/40 relative
                     ${isActive ? "bg-primary/5" : "hover:bg-muted/30"}
                     ${isSavedPosition ? "border-l-4 border-l-amber-500" : ""}
-                    ${isBookmarked ? "border-l-4 border-l-purple-500 bg-purple-50/30" : ""}
+                    ${
+                      isBookmarked
+                        ? "border-l-4 border-l-purple-500 bg-purple-50/30"
+                        : ""
+                    }
                   `}
                     onClick={() => handleAyahClick(ayah.numberInSurah)}
                   >
@@ -1087,10 +1162,14 @@ export default function QuranReaderPage() {
                           className={`mt-2 p-1.5 rounded hover:bg-purple-100 transition-colors ${
                             isBookmarked ? "text-purple-600" : "text-gray-400"
                           }`}
-                          title={isBookmarked ? "Remove bookmark" : "Add bookmark"}
+                          title={
+                            isBookmarked ? "Remove bookmark" : "Add bookmark"
+                          }
                         >
                           <FiBookmark
-                            className={`h-4 w-4 ${isBookmarked ? "fill-current" : ""}`}
+                            className={`h-4 w-4 ${
+                              isBookmarked ? "fill-current" : ""
+                            }`}
                           />
                         </button>
                       </div>
@@ -1261,12 +1340,12 @@ export default function QuranReaderPage() {
                                         currentAyahNumbers.includes(
                                           verseNumber
                                         );
-                                      const isSavedPosition = savedAyahNumbers.includes(
-                                        verseNumber
-                                      ) && showSavedIndicator;
-                                      const isBookmarked = bookmarkedAyahs.includes(
-                                        verseNumber
-                                      );
+                                      const isSavedPosition =
+                                        savedAyahNumbers.includes(
+                                          verseNumber
+                                        ) && showSavedIndicator;
+                                      const isBookmarked =
+                                        bookmarkedAyahs.includes(verseNumber);
 
                                       return (
                                         <span
@@ -1291,8 +1370,16 @@ export default function QuranReaderPage() {
                                                 ? "bg-primary/10 text-primary font-semibold"
                                                 : "hover:bg-muted/30"
                                             }
-                                            ${isSavedPosition ? "bg-amber-100 border-2 border-amber-500" : ""}
-                                            ${isBookmarked ? "bg-purple-100/50 border-2 border-purple-500" : ""}
+                                            ${
+                                              isSavedPosition
+                                                ? "bg-amber-100 border-2 border-amber-500"
+                                                : ""
+                                            }
+                                            ${
+                                              isBookmarked
+                                                ? "bg-purple-100/50 border-2 border-purple-500"
+                                                : ""
+                                            }
                                           `}
                                         >
                                           {words.map((item, idx) => (
@@ -1354,30 +1441,38 @@ export default function QuranReaderPage() {
                     value={currentTime}
                     onChange={(e) => {
                       if (audioRef.current) {
-                        audioRef.current.currentTime = parseFloat(e.target.value);
+                        audioRef.current.currentTime = parseFloat(
+                          e.target.value
+                        );
                       }
                     }}
                     className="w-full cursor-pointer h-2 bg-muted rounded-lg appearance-none"
                   />
                   {/* Bookmark markers on progress bar */}
-                  {recitation?.segments && bookmarkedAyahs.map((ayahNum) => {
-                    const segment = recitation.segments.find(
-                      (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
-                        seg.ayahNumbers?.includes(ayahNum) || seg.ayahNumber === ayahNum
-                    );
-                    if (!segment || !duration) return null;
+                  {recitation?.segments &&
+                    bookmarkedAyahs.map((ayahNum) => {
+                      const segment = recitation.segments.find(
+                        (seg: {
+                          ayahNumbers?: number[];
+                          ayahNumber?: number;
+                          start: number;
+                        }) =>
+                          seg.ayahNumbers?.includes(ayahNum) ||
+                          seg.ayahNumber === ayahNum
+                      );
+                      if (!segment || !duration) return null;
 
-                    const position = (segment.start / duration) * 100;
+                      const position = (segment.start / duration) * 100;
 
-                    return (
-                      <div
-                        key={`bookmark-marker-${ayahNum}`}
-                        className="absolute top-0 w-1 h-2 bg-purple-500 rounded-full pointer-events-none"
-                        style={{ left: `${position}%` }}
-                        title={`Bookmark: Ayah ${ayahNum}`}
-                      />
-                    );
-                  })}
+                      return (
+                        <div
+                          key={`bookmark-marker-${ayahNum}`}
+                          className="absolute top-0 w-1 h-2 bg-purple-500 rounded-full pointer-events-none"
+                          style={{ left: `${position}%` }}
+                          title={`Bookmark: Ayah ${ayahNum}`}
+                        />
+                      );
+                    })}
                 </div>
               </div>
 

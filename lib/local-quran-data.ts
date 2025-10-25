@@ -100,11 +100,24 @@ export async function getVersesBySurah(surahNumber: number): Promise<Verse[]> {
 
 /**
  * Get Mushaf page data (with word-level info for line-by-line rendering)
+ * Returns all verses on page pageNumber (1-604)
  */
 export async function getMushafPage(pageNumber: number): Promise<Verse[]> {
   const response = await fetch("/quran-data/mushaf-pages.json");
   const allPages: Record<string, Verse[]> = await response.json();
   return allPages[pageNumber.toString()] || [];
+}
+
+/**
+ * Get page number for a specific surah's first ayah
+ * Used to jump to the start of a surah in the standalone Mushaf
+ */
+export async function getPageForSurah(surahNumber: number): Promise<number> {
+  const surah = await getSurahByNumber(surahNumber);
+  if (!surah || !surah.pages || surah.pages.length === 0) {
+    return 1; // Default to page 1 if surah not found
+  }
+  return Math.min(...surah.pages); // Return the first page of the surah
 }
 
 /**
@@ -152,6 +165,46 @@ export async function getMushafPagesForSurah(
 export async function getAllJuzs(): Promise<Juz[]> {
   const response = await fetch("/quran-data/juzs.json");
   return response.json();
+}
+
+/**
+ * Get ALL Mushaf pages at once (1-604)
+ * This loads the entire Quran for fast navigation
+ * Also merges translations from verses.json
+ */
+export async function getAllMushafPages(): Promise<Record<string, Verse[]>> {
+  const [pagesResponse, versesResponse] = await Promise.all([
+    fetch("/quran-data/mushaf-pages.json"),
+    fetch("/quran-data/verses.json"),
+  ]);
+
+  const allPages: Record<string, Verse[]> = await pagesResponse.json();
+  const allVerses: Record<string, Verse[]> = await versesResponse.json();
+
+  // Create a map of verse_key to translations for fast lookup
+  const translationsMap = new Map<string, Verse["translations"]>();
+  Object.values(allVerses).forEach((verses) => {
+    verses.forEach((verse) => {
+      if (verse.verse_key && verse.translations) {
+        translationsMap.set(verse.verse_key, verse.translations);
+      }
+    });
+  });
+
+  // Merge translations into mushaf pages
+  Object.keys(allPages).forEach((pageNum) => {
+    allPages[pageNum] = allPages[pageNum].map((verse) => {
+      if (verse.verse_key && translationsMap.has(verse.verse_key)) {
+        return {
+          ...verse,
+          translations: translationsMap.get(verse.verse_key),
+        };
+      }
+      return verse;
+    });
+  });
+
+  return allPages;
 }
 
 /**
