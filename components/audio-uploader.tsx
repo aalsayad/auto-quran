@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import {
   Card,
   CardContent,
@@ -27,6 +28,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { SURAHS } from "@/lib/surah-data";
 import { detectSurahFromFilename } from "@/lib/detect-surah";
 import { splitAudioIntoAyahs, loadFFmpeg } from "@/lib/audio-splitter";
@@ -52,6 +59,7 @@ import {
   FiInfo,
   FiLink,
   FiEdit2,
+  FiExternalLink,
 } from "react-icons/fi";
 import { CostEstimationDialog } from "@/components/cost-estimation-dialog";
 import {
@@ -100,7 +108,7 @@ export default function AudioUploader() {
   const [startPadding, setStartPadding] = useState(0);
   const [silenceThreshold, setSilenceThreshold] = useState(0.04);
   const [minSilenceDuration, setMinSilenceDuration] = useState(0.2);
-  const [isFetchingText, setIsFetchingText] = useState(false);
+  const [, setIsFetchingText] = useState(false);
   const [selectedSegmentIndex, setSelectedSegmentIndex] = useState<
     number | null
   >(null);
@@ -422,6 +430,58 @@ export default function AudioUploader() {
 
     loadRecitation();
   }, [recitationId, user, loadAudioFromS3]);
+
+  // Auto-load ayah text when segments are detected and surah is selected
+  useEffect(() => {
+    const autoLoadAyahText = async () => {
+      // Only auto-load if:
+      // 1. Segments exist
+      // 2. Surah is selected
+      // 3. Ayah texts are not already loaded
+      if (segments.length > 0 && selectedSurah && ayahTexts.length === 0) {
+        console.log("🔄 Auto-loading ayah text for surah:", selectedSurah);
+        setIsFetchingText(true);
+
+        try {
+          const ayahs = await fetchSurahText(selectedSurah);
+          const ayahTextsArray = ayahs.map((ayah, index) => ({
+            ayahNumber: index + 1,
+            text: ayah.text,
+          }));
+          setAyahTexts(ayahTextsArray);
+
+          // Auto-assign ayah numbers if not already assigned
+          if (segments.length > 0 && !segments[0]?.ayahNumber) {
+            const updatedSegments = segments.map((segment, index) => ({
+              ...segment,
+              ayahNumber: index + 1, // Start from 1 by default
+              text: ayahTextsArray[index]?.text || "",
+            }));
+            setSegments(updatedSegments);
+          } else if (segments.length > 0) {
+            // Just update text based on assigned numbers
+            const updatedSegments = segments.map((segment) => ({
+              ...segment,
+              text:
+                segment.ayahNumber !== undefined
+                  ? ayahTextsArray[segment.ayahNumber - 1]?.text || ""
+                  : "",
+            }));
+            setSegments(updatedSegments);
+          }
+
+          console.log("✅ Ayah text auto-loaded successfully");
+        } catch (error) {
+          console.error("❌ Failed to auto-load ayah text:", error);
+        } finally {
+          setIsFetchingText(false);
+        }
+      }
+    };
+
+    autoLoadAyahText();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [segments.length, selectedSurah, ayahTexts.length]);
 
   // Load user's token balance
   useEffect(() => {
@@ -1259,6 +1319,7 @@ export default function AudioUploader() {
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleFetchAyahText = async () => {
     if (!selectedSurah) return;
 
@@ -1424,6 +1485,7 @@ export default function AudioUploader() {
     setSegments(updatedSegments);
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleFixNumbering = () => {
     const renumbered = [...segments];
     let currentAyahNumber = 1;
@@ -1794,28 +1856,68 @@ export default function AudioUploader() {
                     boundaries
                   </CardDescription>
                 </div>
-                <div className="flex gap-2">
-                  {segments.length > 0 && ayahTexts.length === 0 && (
-                    <Button
-                      onClick={handleFetchAyahText}
-                      disabled={isFetchingText || !selectedSurah}
-                      size="sm"
-                      className="cursor-pointer"
-                    >
-                      {isFetchingText ? "Loading..." : "Load Ayah Text"}
-                    </Button>
-                  )}
-                  {segments.length > 0 && ayahTexts.length > 0 && (
-                    <Button
-                      onClick={handleFixNumbering}
-                      variant="outline"
-                      size="sm"
-                      className="cursor-pointer"
-                    >
-                      🔧 Fix Numbering
-                    </Button>
-                  )}
-                </div>
+                <TooltipProvider delayDuration={300}>
+                  <div className="flex gap-2">
+                    {currentRecitationId && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            asChild
+                            variant="default"
+                            size="sm"
+                            className="cursor-pointer gap-2"
+                          >
+                            <Link href={`/reader/${currentRecitationId}`}>
+                              <FiExternalLink className="h-4 w-4" />
+                              Open in Reader
+                            </Link>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Open in Reader</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          onClick={handleSaveProject}
+                          disabled={isSaving || segments.length === 0}
+                          variant="outline"
+                          size="sm"
+                          className="cursor-pointer"
+                        >
+                          <FiSave className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>
+                          {currentRecitationId
+                            ? "Update Recitation"
+                            : "Save Recitation"}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          onClick={handleDownload}
+                          disabled={
+                            isDownloading || isLoadingFFmpeg || !audioFile
+                          }
+                          variant="outline"
+                          size="sm"
+                          className="cursor-pointer"
+                        >
+                          <FiDownload className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Download Individual Ayah MP3s</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </div>
+                </TooltipProvider>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -2101,88 +2203,6 @@ export default function AudioUploader() {
                     </div>
                   </CardContent>
                 </Card>
-              )}
-
-              {hasText && (
-                <div className="space-y-2">
-                  <Label className="text-sm font-medium">
-                    Ayah Assignments
-                  </Label>
-                  <div className="max-h-48 overflow-y-auto space-y-1 border rounded-md p-2">
-                    {segments.map((segment, index) => (
-                      <div
-                        key={index}
-                        className="p-2 bg-muted/30 rounded text-xs flex justify-between items-center gap-2"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium text-muted-foreground min-w-6">
-                            Seg {index + 1}:
-                          </span>
-                          {segment.ayahNumbers ? (
-                            <span className="px-2 py-0.5 bg-amber-500 text-white rounded text-[10px] font-semibold flex items-center gap-1">
-                              <FiLink size={10} /> Ayahs{" "}
-                              {segment.ayahNumbers.join(", ")}
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 bg-primary text-primary-foreground rounded-full text-[10px] font-semibold">
-                              Ayah{" "}
-                              {segment.ayahNumber !== undefined
-                                ? segment.ayahNumber
-                                : index + 1}
-                            </span>
-                          )}
-                        </div>
-                        <p
-                          className="flex-1 text-right px-2 truncate"
-                          dir="rtl"
-                        >
-                          {segment.text || "(no text)"}
-                        </p>
-                        <span className="text-muted-foreground whitespace-nowrap text-[10px]">
-                          {segment.start.toFixed(1)}-{segment.end.toFixed(1)}s
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              <div className="flex gap-2">
-                <Button
-                  onClick={handleSaveProject}
-                  disabled={isSaving || segments.length === 0}
-                  variant="outline"
-                  className="flex-1 cursor-pointer"
-                  size="lg"
-                >
-                  <FiSave />{" "}
-                  {currentRecitationId
-                    ? "Update Recitation"
-                    : "Save Recitation"}
-                </Button>
-                <Button
-                  onClick={handleDownload}
-                  disabled={isDownloading || isLoadingFFmpeg || !audioFile}
-                  className="flex-1 cursor-pointer"
-                  size="lg"
-                >
-                  {isLoadingFFmpeg ? (
-                    "Loading Audio Processor..."
-                  ) : isDownloading ? (
-                    "Creating ZIP..."
-                  ) : (
-                    <>
-                      <FiDownload /> Download ZIP
-                    </>
-                  )}
-                </Button>
-              </div>
-
-              {!audioFile && segments.length > 0 && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 text-center flex items-center justify-center gap-1">
-                  <FiAlertCircle size={12} /> Upload audio file to enable
-                  download
-                </p>
               )}
             </CardContent>
           </Card>
