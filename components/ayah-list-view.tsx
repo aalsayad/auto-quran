@@ -56,7 +56,9 @@ const AyahListViewComponent = ({
       {ayahs.map((ayah, idx) => (
         <div
           key={ayah.numberInSurah}
-          ref={(el) => (ayahRefs.current[idx] = el)}
+          ref={(el) => {
+            if (el) ayahRefs.current[idx] = el;
+          }}
           onClick={() => onAyahClick(ayah.numberInSurah)}
           className={`p-3 sm:p-4 md:p-6 rounded-lg border transition-all cursor-pointer group ${
             currentAyahNumbers.includes(ayah.numberInSurah)
