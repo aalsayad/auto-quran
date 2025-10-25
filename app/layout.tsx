@@ -12,6 +12,7 @@ export const metadata: Metadata = {
   },
 };
 
+//Cache Buster added to force refresh the page when the app is updated
 export default function RootLayout({
   children,
 }: Readonly<{
