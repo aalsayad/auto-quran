@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -19,25 +19,24 @@ import {
 import { Amiri } from "next/font/google";
 import {
   FiEdit,
-  FiBook,
-  FiChevronLeft,
-  FiChevronRight,
-  FiInfo,
-  FiBookmark,
   FiPlay,
   FiPause,
+  FiInfo,
   FiSkipBack,
   FiSkipForward,
   FiRepeat,
+  FiBook,
+  FiVolume2,
   FiVolume,
   FiVolume1,
-  FiVolume2,
   FiVolumeX,
+  FiBookmark,
   FiMoreVertical,
   FiClock,
+  FiChevronLeft,
+  FiChevronRight,
   FiTrash2,
 } from "react-icons/fi";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,23 +54,13 @@ import {
   DialogTrigger,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import {
   getVersesBySurah,
   getMushafPagesForSurah,
   type Verse,
 } from "@/lib/local-quran-data";
-
-// Import new components
-import { QuranAudioPlayer } from "@/components/quran-audio-player";
-import {
-  RepeatControls,
-  type RepeatConfig,
-} from "@/components/repeat-controls";
-import { AyahListView } from "@/components/ayah-list-view";
-import { MushafPageView } from "@/components/mushaf-page-view";
-import { NavigationDialog } from "@/components/navigation-dialog";
-import { BookmarkDropdown } from "@/components/bookmark-dropdown";
 
 const amiri = Amiri({ subsets: ["arabic"], weight: ["400", "700"] });
 
@@ -82,6 +71,24 @@ interface Ayah {
   translation?: string;
 }
 
+type RepeatMode =
+  | "off"
+  | "surah"
+  | "ayah"
+  | "page"
+  | "ayah-range"
+  | "page-range"
+  | "juz";
+
+interface RepeatConfig {
+  mode: RepeatMode;
+  ayahStart?: number;
+  ayahEnd?: number;
+  pageStart?: number;
+  pageEnd?: number;
+  juzNumber?: number;
+}
+
 interface AudioSegment {
   start: number;
   end: number;
@@ -90,49 +97,27 @@ interface AudioSegment {
 }
 
 export default function QuranReaderPage() {
-  // ============================================
-  // ALL HOOKS MUST BE CALLED IN THE SAME ORDER EVERY TIME
-  // ============================================
-
-  // Router and Auth hooks (always first)
   const params = useParams();
   const recitationId = params.recitationId as string;
   const { user, loading: authLoading } = useAuth();
 
-  // ALL useState hooks (in consistent order)
   const [recitation, setRecitation] = useState<SavedRecitation | null>(null);
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
   const [mushafVerses, setMushafVerses] = useState<Verse[]>([]);
   const [viewMode, setViewMode] = useState<"list" | "mushaf">("list");
-  const [showTranslation, setShowTranslation] = useState(false);
+  const [showTranslation, setShowTranslation] = useState(() => {
+    // Load translation preference from localStorage
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("showTranslation");
+      return saved === "true";
+    }
+    return false;
+  });
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [currentAyahNumbers, setCurrentAyahNumbers] = useState<number[]>([]);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(1);
-  const [playbackRate, setPlaybackRate] = useState(1);
-  const [isFetchingAudio, setIsFetchingAudio] = useState(false);
-  const [isLoadingRecitation, setIsLoadingRecitation] = useState(true);
-  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
-  const [repeatConfig, setRepeatConfig] = useState<RepeatConfig>({
-    mode: "off",
-  });
-  const [showRepeatMenu, setShowRepeatMenu] = useState(false);
-  const [savedAyahNumbers, setSavedAyahNumbers] = useState<number[]>([]);
-  const [showSavedIndicator, setShowSavedIndicator] = useState(true);
-  const [bookmarkedAyahs, setBookmarkedAyahs] = useState<number[]>([]);
-  const [bookmarksDetailed, setBookmarksDetailed] = useState<Bookmark[]>([]);
-
-  // Cleanup blob URLs when component unmounts
-  useEffect(() => {
-    return () => {
-      if (audioRef.current?.src && audioRef.current.src.startsWith("blob:")) {
-        console.log("🧹 Cleaning up blob URL on unmount");
-        URL.revokeObjectURL(audioRef.current.src);
-      }
-    };
-  }, []);
 
   // Keep ref in sync with state for stable access in event handlers
   useEffect(() => {
@@ -145,35 +130,42 @@ export default function QuranReaderPage() {
       localStorage.setItem("showTranslation", String(showTranslation));
     }
   }, [showTranslation]);
+  const [volume, setVolume] = useState(1);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [isFetchingAudio, setIsFetchingAudio] = useState(false);
+  const [isLoadingRecitation, setIsLoadingRecitation] = useState(true);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+
+  // Repeat configuration
+  const [repeatConfig, setRepeatConfig] = useState<RepeatConfig>({
+    mode: "off",
+  });
+  const [showRepeatMenu, setShowRepeatMenu] = useState(false);
+  const [savedAyahNumbers, setSavedAyahNumbers] = useState<number[]>([]); // Track where user left off
+  const [showSavedIndicator, setShowSavedIndicator] = useState(true); // Control saved position indicator
+  const [bookmarkedAyahs, setBookmarkedAyahs] = useState<number[]>([]); // Track bookmarked ayahs
+  const [bookmarksDetailed, setBookmarksDetailed] = useState<Bookmark[]>([]); // Track detailed bookmark info for dropdown
+
+  // Navigation dialog state
   const [showNavigationDialog, setShowNavigationDialog] = useState(false);
   const [navigationMode, setNavigationMode] = useState<"ayah" | "page">("page");
   const [selectedAyah, setSelectedAyah] = useState(1);
   const [selectedPage, setSelectedPage] = useState(1);
   const [currentPage, setCurrentPage] = useState(1);
-  const [audioLoadError, setAudioLoadError] = useState<string | null>(null);
 
-  // ALL useRef hooks (in consistent order)
   const audioRef = useRef<HTMLAudioElement>(null);
   const ayahRefs = useRef<(HTMLDivElement | HTMLSpanElement | null)[]>([]);
   const volumeRef = useRef<HTMLDivElement>(null);
-  const audioLoadedRef = useRef(false);
-  const savedPositionTimeRef = useRef<number>(0);
-  const playPromiseRef = useRef<Promise<void> | null>(null);
-  const currentAyahNumbersRef = useRef<number[]>([]);
+  const audioLoadedRef = useRef(false); // Track if audio has been loaded in this session
+  const savedPositionTimeRef = useRef<number>(0); // Store the exact time to restore to (for manual jump only)
+  const previousAyahRef = useRef<number | null>(null); // Track previous ayah to detect changes
+  const playPromiseRef = useRef<Promise<void> | null>(null); // Track ongoing play promise
+  const currentAyahNumbersRef = useRef<number[]>([]); // Track current ayah numbers for stable reference
 
-  // ALL useMemo hooks (in consistent order)
-  const isIOS = useMemo(() => {
-    if (typeof window === "undefined") return false;
-    return /iPad|iPhone|iPod/.test(navigator.userAgent);
-  }, []);
-
-  // Initialize showTranslation from localStorage (after all hooks are defined)
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("showTranslation");
-      setShowTranslation(saved === "true");
-    }
-  }, []);
+  // Detect if device is iOS/iPadOS where volume control is not supported
+  const isIOS =
+    typeof window !== "undefined" &&
+    /iPad|iPhone|iPod/.test(navigator.userAgent);
 
   // Load global settings from localStorage on mount
   useEffect(() => {
@@ -219,33 +211,93 @@ export default function QuranReaderPage() {
     );
   }, [currentAyahNumbers, recitationId]);
 
-  // Helper functions (TODO: Remove when old UI is fully replaced)
-  const toArabicNumerals = useCallback((num: number): string => {
-    if (num === undefined || num === null || isNaN(num)) return "";
+  // Convert to Arabic-Indic numerals
+  const toArabicNumerals = (num: number): string => {
+    if (num === undefined || num === null || isNaN(num)) {
+      return "";
+    }
     const arabicNumerals = ["٠", "١", "٢", "٣", "٤", "٥", "٦", "٧", "٨", "٩"];
     return num
       .toString()
       .split("")
       .map((digit) => arabicNumerals[parseInt(digit)])
       .join("");
+  };
+
+  // Get decorative Quranic verse marker
+  const getVerseMarker = (num: number): string => {
+    return `۝${toArabicNumerals(num)}`;
+  };
+
+  // Clean HTML tags from translation text (e.g., footnotes)
+  // TODO: Implement footnote display - fetch from API endpoint: /foot_notes/{id}
+  // Example: https://api.quran.com/api/v4/foot_notes/195932
+  // Could display as tooltips or expandable sections below each ayah
+  const cleanTranslation = (text: string): string => {
+    // Remove footnote markers like <sup foot_note=195932>1</sup>
+    return text.replace(/<sup[^>]*>.*?<\/sup>/g, "");
+  };
+
+  // Load audio from S3 - only once per session
+  const loadAudioFromS3 = useCallback(async (url: string, fileName: string) => {
+    // Check if audio has already been loaded in this session
+    if (audioLoadedRef.current) {
+      console.log("📻 [Reader] Audio already loaded, skipping fetch");
+      return null;
+    }
+
+    // Validate URL
+    if (!url || url.trim() === "") {
+      console.error("❌ [Reader] No audio URL provided");
+      alert(
+        "This recitation has no audio file. Please upload audio in the editor."
+      );
+      return null;
+    }
+
+    try {
+      setIsFetchingAudio(true);
+      console.log("📻 [Reader] Loading audio from S3...");
+      console.log("📻 [Reader] Audio URL:", url);
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch audio from S3 (Status: ${response.status})`
+        );
+      }
+
+      const blob = await response.blob();
+      const file = new File([blob], fileName, { type: "audio/mpeg" });
+
+      setAudioFile(file);
+      if (audioRef.current) {
+        audioRef.current.src = URL.createObjectURL(file);
+      }
+
+      // Mark audio as loaded for this session
+      audioLoadedRef.current = true;
+      console.log("✅ [Reader] Audio loaded successfully");
+
+      return file;
+    } catch (error) {
+      console.error("❌ [Reader] Failed to load audio from S3:", error);
+      console.error("❌ [Reader] Attempted URL:", url);
+      alert(
+        "Failed to load audio from cloud storage. The file may have been deleted or is inaccessible."
+      );
+      return null;
+    } finally {
+      setIsFetchingAudio(false);
+    }
   }, []);
 
-  const getVerseMarker = useCallback(
-    (num: number): string => `۝${toArabicNumerals(num)}`,
-    [toArabicNumerals]
-  );
-
-  const cleanTranslation = useCallback(
-    (text: string): string => text.replace(/<sup[^>]*>.*?<\/sup>/g, ""),
-    []
-  );
-
-  // Load recitation - AUDIO FIRST, then UI
+  // Load recitation
   useEffect(() => {
     const loadRecitationData = async () => {
       // Wait for auth to finish loading
       if (authLoading) {
-        console.log("⏳ Waiting for auth...");
+        console.log("⏳ [Reader] Waiting for auth to load...");
         return;
       }
 
@@ -256,30 +308,31 @@ export default function QuranReaderPage() {
       }
 
       setIsLoadingRecitation(true);
-      console.log("🔄 Starting recitation load...");
 
-      try {
-        // STEP 1: Load recitation metadata from Supabase
-        const recitationData = await getRecitation(recitationId);
-        if (!recitationData) {
-          alert("Recitation not found. It may have been deleted.");
-          setIsLoadingRecitation(false);
-          return;
-        }
+      // Load from Supabase
+      const recitationData = await getRecitation(recitationId);
+      if (!recitationData) {
+        alert("Recitation not found. It may have been deleted.");
+        return;
+      }
 
-        const loadedRecitation = recitationToSavedRecitation(recitationData);
-        console.log("✅ Recitation metadata loaded");
+      const loadedRecitation = recitationToSavedRecitation(recitationData);
+      console.log("Recitation loaded from Supabase for reader");
 
-        // STEP 2: LOAD AUDIO FIRST - Wait for it to complete
-        if (!loadedRecitation.audioUrl) {
-          alert("This recitation has no audio file.");
-          setIsLoadingRecitation(false);
-          return;
-        }
-
-        // STEP 3: Set recitation first so UI renders (including audio element)
+      if (loadedRecitation) {
         setRecitation(loadedRecitation);
 
+        // Auto-load audio from S3 if available
+        if (loadedRecitation.audioUrl) {
+          loadAudioFromS3(
+            loadedRecitation.audioUrl,
+            loadedRecitation.fileName ||
+              loadedRecitation.audioFileName ||
+              "audio.mp3"
+          );
+        }
+
+        // Fetch Quran text from LOCAL data (no API calls!)
         const surahNumber = loadedRecitation.surahNumber;
 
         // Load both List and Mushaf data in parallel for speed
@@ -391,11 +444,7 @@ export default function QuranReaderPage() {
 
         // Mark loading as complete
         setIsLoadingRecitation(false);
-        console.log("✅ All data loaded! UI ready.");
-      } catch (error) {
-        console.error("❌ Failed to load recitation:", error);
-        alert("Failed to load recitation. Please try again.");
-        setIsLoadingRecitation(false);
+        console.log("✅ [Reader] Recitation data loaded successfully");
       }
     };
 
@@ -403,136 +452,7 @@ export default function QuranReaderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recitationId, user, authLoading]);
 
-  // ALL useMemo hooks (must be called before any early returns)
-  const surahInfo = useMemo(() => {
-    if (!recitation) return null;
-    return SURAHS.find((s) => s.number === recitation.surahNumber);
-  }, [recitation]);
-
-  const speedOptions = useMemo(
-    () => [
-      0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9,
-      2,
-    ],
-    []
-  );
-
-  const surahPageRange = useMemo(() => {
-    if (mushafVerses.length === 0) return { min: 1, max: 1 };
-
-    const pages = mushafVerses
-      .map((v) => v.page_number)
-      .filter((p): p is number => p !== undefined);
-
-    return {
-      min: Math.min(...pages),
-      max: Math.max(...pages),
-    };
-  }, [mushafVerses]);
-
-  // ALL useCallback hooks (must be called before any early returns)
-  const loadAudioFromS3 = useCallback(async (url: string, fileName: string) => {
-    // Skip if already loaded
-    if (audioLoadedRef.current) {
-      console.log("⚠️ Audio already loaded, skipping");
-      return null;
-    }
-
-    // Validate URL
-    if (!url || url.trim() === "") {
-      setAudioLoadError("No audio file available.");
-      return null;
-    }
-
-    try {
-      setIsFetchingAudio(true);
-      setAudioLoadError(null);
-      console.log("🎵 Fetching audio from S3...");
-
-      const response = await fetch(url);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const blob = await response.blob();
-      console.log("✅ Audio blob received:", blob.size, "bytes");
-
-      const file = new File([blob], fileName, { type: "audio/mpeg" });
-      setAudioFile(file);
-
-      // CRITICAL: Wait for audio element to be ready (with retry)
-      let audioElement = audioRef.current;
-      if (!audioElement) {
-        console.log("⏳ Audio element not yet rendered, waiting...");
-        // Wait up to 2 seconds for audio element to be created
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        audioElement = audioRef.current;
-
-        if (!audioElement) {
-          console.error("❌ Audio element not found after waiting!");
-          throw new Error("Audio element not ready");
-        }
-        console.log("✅ Audio element now available");
-      }
-
-      const blobUrl = URL.createObjectURL(file);
-      console.log("🔗 Blob URL created:", blobUrl);
-
-      // Set up event listeners BEFORE setting src
-      const loadPromise = new Promise((resolve, reject) => {
-        const onCanPlay = () => {
-          console.log(
-            "✅ Audio can play! ReadyState:",
-            audioElement.readyState
-          );
-          cleanup();
-          resolve(true);
-        };
-
-        const onError = (e: Event) => {
-          console.error("❌ Audio error event:", e);
-          cleanup();
-          reject(new Error("Audio failed to load"));
-        };
-
-        const cleanup = () => {
-          audioElement.removeEventListener("loadeddata", onCanPlay);
-          audioElement.removeEventListener("canplay", onCanPlay);
-          audioElement.removeEventListener("error", onError);
-        };
-
-        // Listen for BOTH loadeddata AND canplay (more mobile-friendly)
-        audioElement.addEventListener("loadeddata", onCanPlay, { once: true });
-        audioElement.addEventListener("canplay", onCanPlay, { once: true });
-        audioElement.addEventListener("error", onError, { once: true });
-      });
-
-      // Now set the source
-      audioElement.src = blobUrl;
-      audioElement.load();
-      console.log("⏳ Waiting for audio to load...");
-
-      // Wait with timeout
-      await Promise.race([
-        loadPromise,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Audio load timeout (30s)")), 30000)
-        ),
-      ]);
-
-      audioLoadedRef.current = true;
-      console.log("✅ Audio fully ready to play!");
-      return file;
-    } catch (error) {
-      console.error("❌ Audio load failed:", error);
-      setAudioLoadError("Failed to load audio.");
-      audioLoadedRef.current = false;
-      return null;
-    } finally {
-      setIsFetchingAudio(false);
-    }
-  }, []);
-
+  // Scroll to ayah with offset for navbar (mobile-friendly)
   const scrollToAyah = useCallback(
     (ayahNumberInSurah: number) => {
       const ayahIndex = ayahs.findIndex(
@@ -554,6 +474,60 @@ export default function QuranReaderPage() {
     [ayahs]
   );
 
+  // Auto-follow currently playing ayah ONLY when ayah changes during playback
+  useEffect(() => {
+    if (
+      currentAyahNumbers.length > 0 &&
+      mushafVerses.length > 0 &&
+      ayahs.length > 0 &&
+      isPlaying
+    ) {
+      const firstAyahNum = currentAyahNumbers[0];
+
+      // Only proceed if the ayah actually changed
+      if (previousAyahRef.current !== firstAyahNum) {
+        previousAyahRef.current = firstAyahNum;
+
+        const ayah = ayahs.find((a) => a.numberInSurah === firstAyahNum);
+        if (ayah) {
+          const verse = mushafVerses.find((v) => {
+            const ayahNumInVerse = parseInt(v.verse_key.split(":")[1]);
+            return ayahNumInVerse === ayah.numberInSurah;
+          });
+
+          // Change page if needed
+          if (verse?.page_number && verse.page_number !== currentPage) {
+            setCurrentPage(verse.page_number);
+            // Wait for page to render before scrolling
+            setTimeout(() => {
+              scrollToAyah(firstAyahNum);
+            }, 100);
+          } else {
+            // Same page, just scroll to the ayah
+            scrollToAyah(firstAyahNum);
+          }
+        }
+      }
+    } else if (
+      !isPlaying &&
+      mushafVerses.length > 0 &&
+      mushafVerses[0]?.page_number &&
+      currentPage === 1
+    ) {
+      // Default to first page of surah only on initial load
+      setCurrentPage(mushafVerses[0].page_number);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    currentAyahNumbers,
+    mushafVerses,
+    ayahs,
+    currentPage,
+    isPlaying,
+    // scrollToAyah is stable (only depends on ayahs)
+  ]);
+
+  // Audio event handlers
   const handleTimeUpdate = useCallback(() => {
     if (audioRef.current) {
       const time = audioRef.current.currentTime;
@@ -603,25 +577,17 @@ export default function QuranReaderPage() {
         ) {
           const lastSegmentInRange = recitation.segments
             .filter((seg: AudioSegment) => {
-              const ayahNums =
-                seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
-              return ayahNums.some(
-                (num: number) => num <= repeatConfig.ayahEnd!
-              );
+              const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+              return ayahNums.some((num: number) => num <= repeatConfig.ayahEnd!);
             })
             .pop();
 
           if (lastSegmentInRange && time >= lastSegmentInRange.end) {
             // Loop back to start of range
-            const firstSegmentInRange = recitation.segments.find(
-              (seg: AudioSegment) => {
-                const ayahNums =
-                  seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
-                return ayahNums.some(
-                  (num: number) => num >= repeatConfig.ayahStart!
-                );
-              }
-            );
+            const firstSegmentInRange = recitation.segments.find((seg: AudioSegment) => {
+              const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+              return ayahNums.some((num: number) => num >= repeatConfig.ayahStart!);
+            });
 
             if (firstSegmentInRange) {
               console.log("🔄 Looping ayah range back to start");
@@ -641,34 +607,23 @@ export default function QuranReaderPage() {
             .pop();
 
           if (lastVerseOnPage) {
-            const lastAyahNum = parseInt(
-              lastVerseOnPage.verse_key.split(":")[1]
-            );
+            const lastAyahNum = parseInt(lastVerseOnPage.verse_key.split(":")[1]);
             const lastSegmentOnPage = recitation.segments
               .filter((seg: AudioSegment) => {
-                const ayahNums =
-                  seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
                 return ayahNums.includes(lastAyahNum);
               })
               .pop();
 
             if (lastSegmentOnPage && time >= lastSegmentOnPage.end) {
               // Loop back to first verse on page
-              const firstVerseOnPage = mushafVerses.find(
-                (v) => v.page_number === currentPage
-              );
+              const firstVerseOnPage = mushafVerses.find((v) => v.page_number === currentPage);
               if (firstVerseOnPage) {
-                const firstAyahNum = parseInt(
-                  firstVerseOnPage.verse_key.split(":")[1]
-                );
-                const firstSegmentOnPage = recitation.segments.find(
-                  (seg: AudioSegment) => {
-                    const ayahNums =
-                      seg.ayahNumbers ||
-                      (seg.ayahNumber ? [seg.ayahNumber] : []);
-                    return ayahNums.includes(firstAyahNum);
-                  }
-                );
+                const firstAyahNum = parseInt(firstVerseOnPage.verse_key.split(":")[1]);
+                const firstSegmentOnPage = recitation.segments.find((seg: AudioSegment) => {
+                  const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                  return ayahNums.includes(firstAyahNum);
+                });
 
                 if (firstSegmentOnPage) {
                   console.log("🔄 Looping page back to start");
@@ -691,19 +646,14 @@ export default function QuranReaderPage() {
           mushafVerses.length > 0
         ) {
           const lastVerseInRange = mushafVerses
-            .filter(
-              (v) => v.page_number && v.page_number <= repeatConfig.pageEnd!
-            )
+            .filter((v) => v.page_number && v.page_number <= repeatConfig.pageEnd!)
             .pop();
 
           if (lastVerseInRange) {
-            const lastAyahNum = parseInt(
-              lastVerseInRange.verse_key.split(":")[1]
-            );
+            const lastAyahNum = parseInt(lastVerseInRange.verse_key.split(":")[1]);
             const lastSegmentInRange = recitation.segments
               .filter((seg: AudioSegment) => {
-                const ayahNums =
-                  seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
                 return ayahNums.includes(lastAyahNum);
               })
               .pop();
@@ -715,17 +665,11 @@ export default function QuranReaderPage() {
               );
 
               if (firstVerseInRange) {
-                const firstAyahNum = parseInt(
-                  firstVerseInRange.verse_key.split(":")[1]
-                );
-                const firstSegmentInRange = recitation.segments.find(
-                  (seg: AudioSegment) => {
-                    const ayahNums =
-                      seg.ayahNumbers ||
-                      (seg.ayahNumber ? [seg.ayahNumber] : []);
-                    return ayahNums.includes(firstAyahNum);
-                  }
-                );
+                const firstAyahNum = parseInt(firstVerseInRange.verse_key.split(":")[1]);
+                const firstSegmentInRange = recitation.segments.find((seg: AudioSegment) => {
+                  const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                  return ayahNums.includes(firstAyahNum);
+                });
 
                 if (firstSegmentInRange) {
                   console.log("🔄 Looping page range back to start");
@@ -812,72 +756,14 @@ export default function QuranReaderPage() {
     // Allow free seeking - no auto-restore
   }, []);
 
-  // Safe play function that properly handles promises with mobile support
+  // Safe play function that properly handles promises
   const safePlay = useCallback(async () => {
-    const audio = audioRef.current;
-    if (!audio) {
-      console.warn("Audio element not available");
-      return;
-    }
-
-    // Check if audio has a source
-    if (!audio.src) {
-      console.warn("Audio source not set");
-      setAudioLoadError("Audio not loaded yet. Please wait.");
-      return;
-    }
-
-    // Log readyState for debugging
-    console.log(
-      "🎯 Attempting to play. ReadyState:",
-      audio.readyState,
-      "Src:",
-      audio.src.substring(0, 50)
-    );
-
-    // If readyState is too low, wait for it to load
-    if (audio.readyState < 2) {
-      console.log("⏳ Audio not ready yet, waiting for loadeddata event...");
-      setAudioLoadError("Loading audio data...");
-
-      // Wait for audio to be ready
-      await new Promise((resolve) => {
-        const onReady = () => {
-          console.log("✅ Audio now ready! ReadyState:", audio.readyState);
-          audio.removeEventListener("loadeddata", onReady);
-          audio.removeEventListener("canplay", onReady);
-          setAudioLoadError(null);
-          resolve(true);
-        };
-        audio.addEventListener("loadeddata", onReady, { once: true });
-        audio.addEventListener("canplay", onReady, { once: true });
-
-        // Timeout after 5 seconds
-        setTimeout(() => {
-          audio.removeEventListener("loadeddata", onReady);
-          audio.removeEventListener("canplay", onReady);
-          resolve(false);
-        }, 5000);
-      });
-    }
+    if (!audioRef.current) return;
 
     try {
-      // Clear any error messages
-      setAudioLoadError(null);
-
       // Wait for any existing play promise to complete first
       if (playPromiseRef.current !== null) {
-        try {
-          await playPromiseRef.current;
-        } catch (err) {
-          console.log("Previous play promise aborted");
-        }
-      }
-
-      // Make sure audio element still exists before playing
-      if (!audioRef.current) {
-        console.warn("Audio element removed");
-        return;
+        await playPromiseRef.current;
       }
 
       // Start new play and track the promise
@@ -888,25 +774,9 @@ export default function QuranReaderPage() {
       playPromiseRef.current = null;
       setIsPlaying(true);
     } catch (error) {
+      console.warn("Play interrupted:", error);
       playPromiseRef.current = null;
-
-      // Ignore abort errors - they're expected when rapidly toggling play/pause
-      if (error instanceof Error && error.name === "AbortError") {
-        console.log("Play aborted");
-        return;
-      }
-
       setIsPlaying(false);
-
-      // Handle other play errors
-      if (error instanceof Error) {
-        console.error("Play error:", error.name, error.message);
-        if (error.name === "NotAllowedError") {
-          setAudioLoadError("Please tap play to start audio.");
-        } else {
-          setAudioLoadError("Playback failed. Try refreshing.");
-        }
-      }
     }
   }, []);
 
@@ -920,31 +790,24 @@ export default function QuranReaderPage() {
         await playPromiseRef.current;
       }
 
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      audioRef.current.pause();
       setIsPlaying(false);
     } catch (error) {
-      console.warn("Pause error:", error);
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      console.warn("Pause after play completion:", error);
+      audioRef.current.pause();
       setIsPlaying(false);
     }
   }, []);
 
   const handlePlayPause = useCallback(() => {
-    if (!audioRef.current) {
-      console.warn("Audio element not ready");
-      return;
-    }
-
-    if (isPlaying) {
-      safePause();
-    } else {
-      safePlay();
-      // Hide the saved indicator once user starts playing from any position
-      setShowSavedIndicator(false);
+    if (audioRef.current) {
+      if (isPlaying) {
+        safePause();
+      } else {
+        safePlay();
+        // Hide the saved indicator once user starts playing from any position
+        setShowSavedIndicator(false);
+      }
     }
   }, [isPlaying, safePlay, safePause]);
 
@@ -955,11 +818,7 @@ export default function QuranReaderPage() {
       console.log("🔄 Looping surah back to start");
       audioRef.current.currentTime = 0;
       safePlay();
-    } else if (
-      repeatConfig.mode === "juz" &&
-      recitation?.segments &&
-      audioRef.current
-    ) {
+    } else if (repeatConfig.mode === "juz" && recitation?.segments && audioRef.current) {
       // For juz repeat, loop back to the first segment
       // (This assumes the entire surah is within the juz - for cross-surah juz, more logic needed)
       console.log("🔄 Looping juz back to start");
@@ -993,7 +852,7 @@ export default function QuranReaderPage() {
     }
   };
 
-  const handleNextAyah = useCallback(() => {
+  const handleNextAyah = () => {
     const currentAyahs = currentAyahNumbersRef.current;
     if (!recitation?.segments || currentAyahs.length === 0) return;
 
@@ -1022,9 +881,9 @@ export default function QuranReaderPage() {
         safePlay();
       }
     }
-  }, [recitation?.segments, isPlaying, safePlay]);
+  };
 
-  const handlePrevAyah = useCallback(() => {
+  const handlePrevAyah = () => {
     const currentAyahs = currentAyahNumbersRef.current;
     if (!recitation?.segments || currentAyahs.length === 0) return;
 
@@ -1053,7 +912,7 @@ export default function QuranReaderPage() {
         safePlay();
       }
     }
-  }, [recitation?.segments, isPlaying, safePlay]);
+  };
 
   const handleVolumeChange = (newVolume: number) => {
     setVolume(newVolume);
@@ -1091,50 +950,47 @@ export default function QuranReaderPage() {
     }
   };
 
-  const handleAyahClick = useCallback(
-    (ayahNumber: number) => {
-      if (!recitation?.segments || !audioRef.current) return;
+  const handleAyahClick = (ayahNumber: number) => {
+    if (!recitation?.segments || !audioRef.current) return;
 
-      const segment = recitation.segments.find(
-        (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
-          seg.ayahNumbers?.includes(ayahNumber) || seg.ayahNumber === ayahNumber
-      );
+    const segment = recitation.segments.find(
+      (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
+        seg.ayahNumbers?.includes(ayahNumber) || seg.ayahNumber === ayahNumber
+    );
 
-      if (segment) {
-        // Update currentAyahNumbers to the newly selected ayah
-        // This is crucial for ayah looping to work with the new selection
-        let ayahNums: number[] = [];
-        if (segment.ayahNumbers && segment.ayahNumbers.length > 0) {
-          ayahNums = segment.ayahNumbers;
-        } else if (segment.ayahNumber !== undefined) {
-          ayahNums = [segment.ayahNumber];
-        }
-
-        if (ayahNums.length > 0) {
-          setCurrentAyahNumbers(ayahNums);
-          console.log(
-            "👆 Clicked ayah:",
-            ayahNums,
-            "- Repeat mode:",
-            repeatConfig.mode
-          );
-        }
-
-        audioRef.current.currentTime = segment.start;
-
-        // Hide saved indicator when user manually selects an ayah
-        setShowSavedIndicator(false);
-
-        // Clear the saved position enforcement when user manually jumps
-        savedPositionTimeRef.current = 0;
-
-        if (!isPlaying) {
-          safePlay();
-        }
+    if (segment) {
+      // Update currentAyahNumbers to the newly selected ayah
+      // This is crucial for ayah looping to work with the new selection
+      let ayahNums: number[] = [];
+      if (segment.ayahNumbers && segment.ayahNumbers.length > 0) {
+        ayahNums = segment.ayahNumbers;
+      } else if (segment.ayahNumber !== undefined) {
+        ayahNums = [segment.ayahNumber];
       }
-    },
-    [recitation?.segments, isPlaying, safePlay, repeatConfig.mode]
-  );
+
+      if (ayahNums.length > 0) {
+        setCurrentAyahNumbers(ayahNums);
+        console.log(
+          "👆 Clicked ayah:",
+          ayahNums,
+          "- Repeat mode:",
+          repeatConfig.mode
+        );
+      }
+
+      audioRef.current.currentTime = segment.start;
+
+      // Hide saved indicator when user manually selects an ayah
+      setShowSavedIndicator(false);
+
+      // Clear the saved position enforcement when user manually jumps
+      savedPositionTimeRef.current = 0;
+
+      if (!isPlaying) {
+        safePlay();
+      }
+    }
+  };
 
   // Page-based navigation (like Mushaf)
   const handleNextPage = () => {
@@ -1425,49 +1281,6 @@ export default function QuranReaderPage() {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [handlePlayPause]);
 
-  // Load audio AFTER audio element is rendered
-  useEffect(() => {
-    const loadAudio = async () => {
-      console.log("🔍 Checking audio loading conditions:", {
-        hasRecitation: !!recitation,
-        hasAudioUrl: !!recitation?.audioUrl,
-        alreadyLoaded: audioLoadedRef.current,
-        hasAudioElement: !!audioRef.current,
-      });
-
-      if (!recitation?.audioUrl) {
-        console.log("⚠️ No audio URL in recitation");
-        return;
-      }
-
-      if (audioLoadedRef.current) {
-        console.log("⚠️ Audio already loaded");
-        return;
-      }
-
-      if (!audioRef.current) {
-        console.log("⚠️ Audio element not ready yet, will retry...");
-        // Audio element not ready yet, useEffect will run again when it is
-        return;
-      }
-
-      console.log("🎵 Audio element ready, loading audio from S3...");
-      const audioFile = await loadAudioFromS3(
-        recitation.audioUrl,
-        recitation.fileName || recitation.audioFileName || "audio.mp3"
-      );
-
-      if (!audioFile) {
-        alert("Failed to load audio. Please try again.");
-      } else {
-        console.log("✅ Audio loaded and ready to play!");
-      }
-    };
-
-    loadAudio();
-  }, [recitation, loadAudioFromS3]);
-
-  // Early return AFTER all hooks are called
   if (
     isLoadingRecitation ||
     !recitation ||
@@ -1475,39 +1288,27 @@ export default function QuranReaderPage() {
     mushafVerses.length === 0
   ) {
     return (
-      <>
-        <div className="flex flex-col items-center justify-center min-h-screen gap-4">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-          <div className="text-center space-y-2">
-            <p className="text-muted-foreground font-medium">
-              {isFetchingAudio
-                ? "Loading audio from cloud..."
-                : "Loading recitation..."}
-            </p>
-            {isFetchingAudio && (
-              <p className="text-sm text-muted-foreground">
-                Please wait while we fetch the audio file
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Audio element must exist even during loading */}
-        <audio
-          ref={audioRef}
-          playsInline
-          onTimeUpdate={handleTimeUpdate}
-          onLoadedMetadata={handleLoadedMetadata}
-          onCanPlay={handleCanPlay}
-          onSeeking={handleSeeking}
-          onEnded={handleEnded}
-          onPlay={() => setIsPlaying(true)}
-          onPause={() => setIsPlaying(false)}
-          style={{ display: "none" }}
-        />
-      </>
+      <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
+        <p className="text-muted-foreground">Loading recitation...</p>
+      </div>
     );
   }
+
+  const surahInfo = SURAHS.find((s) => s.number === recitation.surahNumber);
+  const speedOptions = [
+    0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2,
+  ];
+
+  // Calculate page range for current surah
+  const surahPageRange = {
+    min: mushafVerses.length > 0
+      ? Math.min(...mushafVerses.map(v => v.page_number || 604).filter(p => p > 0))
+      : 1,
+    max: mushafVerses.length > 0
+      ? Math.max(...mushafVerses.map(v => v.page_number || 1).filter(p => p > 0))
+      : 604,
+  };
 
   return (
     <div className="min-h-screen bg-background pb-32">
@@ -1518,8 +1319,8 @@ export default function QuranReaderPage() {
 
         {/* Recitation Header */}
         <div className="container mx-auto px-4 py-3 sm:py-4">
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
+            <div className="min-w-0 flex-1">
               <h1 className="text-lg sm:text-2xl font-bold truncate">
                 {recitation.name}
               </h1>
@@ -1530,15 +1331,14 @@ export default function QuranReaderPage() {
               </p>
             </div>
 
-            {/* Edit Button - Icon Only */}
+            {/* Edit Button */}
             <Link href={`/editor/${recitation.id}`}>
               <Button
                 variant="outline"
-                size="icon"
-                className="cursor-pointer h-9 w-9 shrink-0"
-                title="Edit Recitation"
+                className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
               >
-                <FiEdit className="h-4 w-4" />
+                <FiEdit className="h-3 w-3 sm:h-4 sm:w-4" />
+                <span>Edit</span>
               </Button>
             </Link>
           </div>
@@ -2201,12 +2001,6 @@ export default function QuranReaderPage() {
                 Fetching audio...
               </span>
             </div>
-          ) : audioLoadError ? (
-            <div className="flex items-center justify-center py-1 sm:py-2">
-              <p className="text-xs sm:text-sm text-destructive">
-                <FiInfo className="inline mr-1" /> {audioLoadError}
-              </p>
-            </div>
           ) : !audioFile ? (
             <div className="flex items-center justify-center py-1 sm:py-2">
               <p className="text-xs sm:text-sm text-muted-foreground">
@@ -2406,9 +2200,7 @@ export default function QuranReaderPage() {
                   >
                     <DropdownMenuTrigger asChild>
                       <Button
-                        variant={
-                          repeatConfig.mode !== "off" ? "default" : "outline"
-                        }
+                        variant={repeatConfig.mode !== "off" ? "default" : "outline"}
                         size="icon"
                         className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10 relative"
                         title={`Repeat: ${getRepeatLabel()}`}
@@ -2478,9 +2270,7 @@ export default function QuranReaderPage() {
                       </DropdownMenuLabel>
                       <div className="px-2 py-3 space-y-3">
                         <div className="space-y-1.5">
-                          <label className="text-xs font-medium">
-                            Ayah Range
-                          </label>
+                          <label className="text-xs font-medium">Ayah Range</label>
                           <div className="flex gap-2 items-center">
                             <Input
                               type="number"
@@ -2499,9 +2289,7 @@ export default function QuranReaderPage() {
                               }}
                               className="h-8 text-xs"
                             />
-                            <span className="text-xs text-muted-foreground">
-                              to
-                            </span>
+                            <span className="text-xs text-muted-foreground">to</span>
                             <Input
                               type="number"
                               placeholder="To"
@@ -2521,16 +2309,14 @@ export default function QuranReaderPage() {
                             />
                           </div>
                           <p className="text-xs text-muted-foreground">
-                            This surah has {ayahs.length} ayahs (1-
-                            {ayahs.length})
+                            This surah has {ayahs.length} ayahs (1-{ayahs.length})
                           </p>
                           <Button
                             onClick={() => {
                               if (
                                 repeatConfig.ayahStart &&
                                 repeatConfig.ayahEnd &&
-                                repeatConfig.ayahStart <=
-                                  repeatConfig.ayahEnd &&
+                                repeatConfig.ayahStart <= repeatConfig.ayahEnd &&
                                 repeatConfig.ayahStart >= 1 &&
                                 repeatConfig.ayahEnd <= ayahs.length
                               ) {
@@ -2557,9 +2343,7 @@ export default function QuranReaderPage() {
 
                         {/* Repeat Page Range */}
                         <div className="space-y-1.5">
-                          <label className="text-xs font-medium">
-                            Page Range
-                          </label>
+                          <label className="text-xs font-medium">Page Range</label>
                           <div className="flex gap-2 items-center">
                             <Input
                               type="number"
@@ -2569,11 +2353,7 @@ export default function QuranReaderPage() {
                               value={repeatConfig.pageStart || ""}
                               onChange={(e) => {
                                 const val = parseInt(e.target.value);
-                                if (
-                                  !val ||
-                                  (val >= surahPageRange.min &&
-                                    val <= surahPageRange.max)
-                                ) {
+                                if (!val || (val >= surahPageRange.min && val <= surahPageRange.max)) {
                                   setRepeatConfig({
                                     ...repeatConfig,
                                     pageStart: val || undefined,
@@ -2582,9 +2362,7 @@ export default function QuranReaderPage() {
                               }}
                               className="h-8 text-xs"
                             />
-                            <span className="text-xs text-muted-foreground">
-                              to
-                            </span>
+                            <span className="text-xs text-muted-foreground">to</span>
                             <Input
                               type="number"
                               placeholder="To"
@@ -2593,11 +2371,7 @@ export default function QuranReaderPage() {
                               value={repeatConfig.pageEnd || ""}
                               onChange={(e) => {
                                 const val = parseInt(e.target.value);
-                                if (
-                                  !val ||
-                                  (val >= surahPageRange.min &&
-                                    val <= surahPageRange.max)
-                                ) {
+                                if (!val || (val >= surahPageRange.min && val <= surahPageRange.max)) {
                                   setRepeatConfig({
                                     ...repeatConfig,
                                     pageEnd: val || undefined,
@@ -2608,16 +2382,14 @@ export default function QuranReaderPage() {
                             />
                           </div>
                           <p className="text-xs text-muted-foreground">
-                            This surah spans pages {surahPageRange.min}-
-                            {surahPageRange.max}
+                            This surah spans pages {surahPageRange.min}-{surahPageRange.max}
                           </p>
                           <Button
                             onClick={() => {
                               if (
                                 repeatConfig.pageStart &&
                                 repeatConfig.pageEnd &&
-                                repeatConfig.pageStart <=
-                                  repeatConfig.pageEnd &&
+                                repeatConfig.pageStart <= repeatConfig.pageEnd &&
                                 repeatConfig.pageStart >= surahPageRange.min &&
                                 repeatConfig.pageEnd <= surahPageRange.max
                               ) {
@@ -2704,10 +2476,10 @@ export default function QuranReaderPage() {
         </div>
       </div>
 
-      {/* Simple audio element - no complex logic */}
+      {/* Hidden audio element - We handle looping manually in handleTimeUpdate/handleEnded */}
       <audio
         ref={audioRef}
-        playsInline
+        loop={false}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
