@@ -10,8 +10,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { SavedProject } from "@/lib/types";
-import CreateProjectDialog from "@/components/create-project-dialog";
+import type { SavedRecitation } from "@/lib/types";
+import CreateRecitationDialog from "@/components/create-recitation-dialog";
 import Navbar from "@/components/navbar";
 import { useAuth } from "@/contexts/auth-context";
 import {
@@ -19,7 +19,7 @@ import {
   deleteRecitation,
   updateRecitation,
 } from "@/lib/supabase-storage";
-import { recitationToSavedProject } from "@/lib/types";
+import { recitationToSavedRecitation } from "@/lib/types";
 import {
   FiBook,
   FiPlus,
@@ -47,74 +47,74 @@ import { Label } from "@/components/ui/label";
 
 export default function LibraryPage() {
   const { user } = useAuth();
-  const [projects, setProjects] = useState<SavedProject[]>([]);
+  const [recitations, setRecitations] = useState<SavedRecitation[]>([]);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
-  const [renameProjectId, setRenameProjectId] = useState<string | null>(null);
-  const [newProjectName, setNewProjectName] = useState("");
+  const [renameRecitationId, setRenameRecitationId] = useState<string | null>(null);
+  const [newRecitationName, setNewRecitationName] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadProjects();
+    loadRecitations();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
-  const loadProjects = async () => {
+  const loadRecitations = async () => {
     setLoading(true);
     try {
       if (!user) {
-        setProjects([]);
+        setRecitations([]);
         return;
       }
 
       // Load from Supabase
-      const recitations = await getRecitations(user.id);
-      const projectsData = recitations.map(recitationToSavedProject);
+      const recitationsData = await getRecitations(user.id);
+      const recitationsFormatted = recitationsData.map(recitationToSavedRecitation);
       // Sort by last modified date (newest first)
-      projectsData.sort(
+      recitationsFormatted.sort(
         (a, b) =>
           new Date(b.lastModified).getTime() -
           new Date(a.lastModified).getTime()
       );
-      setProjects(projectsData);
+      setRecitations(recitationsFormatted);
     } catch (error) {
-      console.error("❌ [Library] Error loading projects:", error);
+      console.error("❌ [Library] Error loading recitations:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (projectId: string) => {
-    const project = projects.find((p) => p.id === projectId);
+  const handleDelete = async (recitationId: string) => {
+    const recitation = recitations.find((p) => p.id === recitationId);
 
-    if (!project) return;
+    if (!recitation) return;
 
     if (
       !confirm(
-        "Are you sure you want to delete this project? This will also delete the audio file from cloud storage."
+        "Are you sure you want to delete this recitation? This will also delete the audio file from cloud storage."
       )
     ) {
       return;
     }
 
     try {
-      // If project has an audio URL, delete from S3 first
-      if (project.audioUrl) {
-        console.log("🗑️  [Library] Deleting audio from S3:", project.audioUrl);
+      // If recitation has an audio URL, delete from S3 first
+      if (recitation.audioUrl) {
+        console.log("🗑️  [Library] Deleting audio from S3:", recitation.audioUrl);
 
         const response = await fetch("/api/delete-audio", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ audioUrl: project.audioUrl }),
+          body: JSON.stringify({ audioUrl: recitation.audioUrl }),
         });
 
         if (response.ok) {
           console.log("✅ [Library] Audio deleted from S3 successfully");
         } else {
           console.warn(
-            "⚠️  [Library] Failed to delete audio from S3, continuing with project deletion"
+            "⚠️  [Library] Failed to delete audio from S3, continuing with recitation deletion"
           );
         }
       } else {
@@ -122,67 +122,67 @@ export default function LibraryPage() {
       }
 
       if (!user) {
-        alert("Please sign in to delete projects");
+        alert("Please sign in to delete recitations");
         return;
       }
 
       // Delete from Supabase
-      await deleteRecitation(projectId);
+      await deleteRecitation(recitationId);
       console.log("✅ [Library] Recitation deleted from Supabase");
 
-      loadProjects();
-      console.log("✅ [Library] Project deleted successfully");
+      loadRecitations();
+      console.log("✅ [Library] Recitation deleted successfully");
     } catch (error) {
       console.error("❌ [Library] Error during deletion:", error);
-      alert("Failed to delete project. Please try again.");
+      alert("Failed to delete recitation. Please try again.");
     }
   };
 
-  const handleExport = (project: SavedProject) => {
-    const dataStr = JSON.stringify(project, null, 2);
+  const handleExport = (recitation: SavedRecitation) => {
+    const dataStr = JSON.stringify(recitation, null, 2);
     const dataBlob = new Blob([dataStr], { type: "application/json" });
     const url = URL.createObjectURL(dataBlob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${project.name.replace(/[^a-z0-9]/gi, "-")}-${
+    link.download = `${recitation.name.replace(/[^a-z0-9]/gi, "-")}-${
       new Date().toISOString().split("T")[0]
     }.json`;
     link.click();
     URL.revokeObjectURL(url);
   };
 
-  const handleOpenRename = (projectId: string) => {
-    const project = projects.find((p) => p.id === projectId);
-    if (project) {
-      setRenameProjectId(projectId);
-      setNewProjectName(project.name);
+  const handleOpenRename = (recitationId: string) => {
+    const recitation = recitations.find((p) => p.id === recitationId);
+    if (recitation) {
+      setRenameRecitationId(recitationId);
+      setNewRecitationName(recitation.name);
       setShowRenameDialog(true);
     }
   };
 
   const handleRename = async () => {
-    if (!renameProjectId || !newProjectName.trim()) return;
+    if (!renameRecitationId || !newRecitationName.trim()) return;
 
     try {
       if (!user) {
-        alert("Please sign in to rename projects");
+        alert("Please sign in to rename recitations");
         return;
       }
 
       // Update in Supabase (update reciter_name)
-      const newReciterName = newProjectName.trim().split(" - ")[0];
-      await updateRecitation(renameProjectId, {
+      const newReciterName = newRecitationName.trim().split(" - ")[0];
+      await updateRecitation(renameRecitationId, {
         reciter_name: newReciterName,
       });
       console.log("✅ [Library] Recitation renamed in Supabase");
 
-      loadProjects();
+      loadRecitations();
       setShowRenameDialog(false);
-      setRenameProjectId(null);
-      setNewProjectName("");
+      setRenameRecitationId(null);
+      setNewRecitationName("");
     } catch (error) {
-      console.error("Failed to rename project:", error);
-      alert("Failed to rename project. Please try again.");
+      console.error("Failed to rename recitation:", error);
+      alert("Failed to rename recitation. Please try again.");
     }
   };
 
@@ -204,10 +204,10 @@ export default function LibraryPage() {
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4 sm:mb-6">
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 sm:gap-3">
-              Project Library
+              Recitation Library
             </h1>
             <p className="text-sm sm:text-base text-muted-foreground mt-1 sm:mt-2">
-              Your saved segmentation projects
+              Your saved recitations
             </p>
           </div>
           <Button
@@ -215,8 +215,8 @@ export default function LibraryPage() {
             className="cursor-pointer gap-1 sm:gap-2 text-sm sm:text-base px-3 sm:px-4 py-2 sm:py-2 w-full sm:w-auto"
           >
             <FiPlus className="h-4 w-4" />
-            <span className="hidden xs:inline">Create New Project</span>
-            <span className="xs:hidden">New Project</span>
+            <span className="hidden xs:inline">Create New Recitation</span>
+            <span className="xs:hidden">New Recitation</span>
           </Button>
         </div>
 
@@ -224,7 +224,7 @@ export default function LibraryPage() {
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground mb-4">
-                Please sign in to view and manage your projects
+                Please sign in to view and manage your recitations
               </p>
             </CardContent>
           </Card>
@@ -232,54 +232,54 @@ export default function LibraryPage() {
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground">
-                Loading projects...
+                Loading recitations...
               </p>
             </CardContent>
           </Card>
-        ) : projects.length === 0 ? (
+        ) : recitations.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center justify-center py-12">
               <p className="text-lg text-muted-foreground mb-4">
-                No saved projects yet
+                No saved recitations yet
               </p>
               <Button
                 onClick={() => setShowCreateDialog(true)}
                 className="cursor-pointer"
               >
-                Create Your First Project
+                Create Your First Recitation
               </Button>
             </CardContent>
           </Card>
         ) : (
           <div className="grid gap-3 sm:gap-4 items-start">
-            {projects.map((project) => (
+            {recitations.map((recitation) => (
               <Card
-                key={project.id}
+                key={recitation.id}
                 className="transition-all duration-200 hover:border-primary/30"
               >
                 <CardHeader className="p-4 sm:p-6">
                   <div className="flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4">
                     <div className="flex-1 min-w-0">
                       <CardTitle className="text-lg sm:text-xl wrap-break-word">
-                        {project.name}
+                        {recitation.name}
                       </CardTitle>
                       <CardDescription className="mt-2 space-y-2">
                         <div className="flex flex-col gap-2 text-xs sm:text-sm">
                           <div className="flex items-start gap-1">
                             <FiFile size={12} className="shrink-0 mt-0.5" />
                             <span className="wrap-break-word min-w-0">
-                              {project.fileName || "No file"}
+                              {recitation.fileName || "No file"}
                             </span>
                           </div>
                           <div className="flex items-start gap-1">
                             <FiBook size={12} className="shrink-0 mt-0.5" />
                             <span className="wrap-break-word min-w-0">
-                              Surah {project.surahNumber} - {project.surahName}
+                              Surah {recitation.surahNumber} - {recitation.surahName}
                             </span>
                           </div>
                           <div className="flex items-center gap-1">
                             <FiHash size={12} className="shrink-0" />
-                            <span>{project.segments.length} segments</span>
+                            <span>{recitation.segments.length} segments</span>
                           </div>
                         </div>
                         <div className="flex flex-col gap-2 text-xs">
@@ -288,14 +288,14 @@ export default function LibraryPage() {
                             <span className="wrap-break-word min-w-0">
                               Created:{" "}
                               {formatDate(
-                                project.dateCreated || project.createdAt
+                                recitation.dateCreated || recitation.createdAt
                               )}
                             </span>
                           </div>
                           <div className="flex items-start gap-1">
                             <FiClock size={10} className="shrink-0 mt-0.5" />
                             <span className="wrap-break-word min-w-0">
-                              Modified: {formatDate(project.lastModified)}
+                              Modified: {formatDate(recitation.lastModified)}
                             </span>
                           </div>
                         </div>
@@ -305,9 +305,9 @@ export default function LibraryPage() {
                     {/* Mobile: Stack buttons vertically, Desktop: Horizontal */}
                     <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
                       <div className="flex gap-1 sm:gap-2 flex-wrap">
-                        {project.segments.length > 0 ? (
+                        {recitation.segments.length > 0 ? (
                           <Link
-                            href={`/reader/${project.id}`}
+                            href={`/reader/${recitation.id}`}
                             className="flex-none"
                           >
                             <Button
@@ -333,7 +333,7 @@ export default function LibraryPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleOpenRename(project.id)}
+                          onClick={() => handleOpenRename(recitation.id)}
                           className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 transition-opacity"
                         >
                           <FiEdit2 size={12} className="sm:hidden" />
@@ -344,7 +344,7 @@ export default function LibraryPage() {
 
                       <div className="flex gap-1 sm:gap-2 flex-wrap">
                         <Link
-                          href={`/editor/${project.id}`}
+                          href={`/editor/${recitation.id}`}
                           className="flex-none"
                         >
                           <Button
@@ -360,7 +360,7 @@ export default function LibraryPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleExport(project)}
+                          onClick={() => handleExport(recitation)}
                           className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 transition-opacity"
                         >
                           <FiDownload size={12} className="sm:hidden" />
@@ -370,7 +370,7 @@ export default function LibraryPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleDelete(project.id)}
+                          onClick={() => handleDelete(recitation.id)}
                           className="cursor-pointer gap-1 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2 w-auto opacity-60 hover:opacity-100 text-muted-foreground hover:text-destructive hover:border-destructive transition-all"
                         >
                           <FiTrash2 size={12} className="sm:hidden" />
@@ -381,12 +381,12 @@ export default function LibraryPage() {
                     </div>
                   </div>
                 </CardHeader>
-                {project.ayahTexts && project.ayahTexts.length > 0 && (
+                {recitation.ayahTexts && recitation.ayahTexts.length > 0 && (
                   <CardContent>
                     <div className="text-xs text-muted-foreground">
                       <span className="flex items-center gap-1">
                         <FiCheckCircle size={12} /> Ayah text loaded (
-                        {project.ayahTexts.length} ayahs)
+                        {recitation.ayahTexts.length} ayahs)
                       </span>
                     </div>
                   </CardContent>
@@ -401,48 +401,47 @@ export default function LibraryPage() {
             <FiInfo /> Tips
           </h3>
           <ul className="text-sm text-muted-foreground space-y-1">
-            <li>• Projects are saved in your browser&apos;s localStorage</li>
-            <li>• Export projects as JSON for backup</li>
+            <li>• Recitations are saved to the cloud</li>
+            <li>• Export recitations as JSON for backup</li>
             <li>
-              • Click &quot;Load&quot; to continue editing a saved project
+              • Click &quot;Read&quot; to view your completed recitation
             </li>
             <li>
-              • Clearing browser data will delete all saved projects (export to
-              backup!)
+              • Click &quot;Edit&quot; to continue editing a recitation
             </li>
           </ul>
         </div>
       </div>
 
-      <CreateProjectDialog
+      <CreateRecitationDialog
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
       />
 
-      {/* Rename Project Dialog */}
+      {/* Rename Recitation Dialog */}
       <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <FiEdit2 /> Rename Project
+              <FiEdit2 /> Rename Recitation
             </DialogTitle>
             <DialogDescription>
-              Enter a new name for your project.
+              Enter a new name for your recitation.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="projectName">Project Name</Label>
+              <Label htmlFor="recitationName">Recitation Name</Label>
               <Input
-                id="projectName"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
+                id="recitationName"
+                value={newRecitationName}
+                onChange={(e) => setNewRecitationName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     handleRename();
                   }
                 }}
-                placeholder="Enter project name"
+                placeholder="Enter recitation name"
                 autoFocus
               />
             </div>
@@ -457,7 +456,7 @@ export default function LibraryPage() {
             </Button>
             <Button
               onClick={handleRename}
-              disabled={!newProjectName.trim()}
+              disabled={!newRecitationName.trim()}
               className="cursor-pointer gap-2"
             >
               <FiEdit2 /> Rename

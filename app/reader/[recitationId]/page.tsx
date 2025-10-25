@@ -4,11 +4,17 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import type { SavedProject } from "@/lib/types";
+import type { SavedRecitation } from "@/lib/types";
 import { SURAHS } from "@/lib/surah-data";
 import { useAuth } from "@/contexts/auth-context";
 import { getRecitation } from "@/lib/supabase-storage";
-import { recitationToSavedProject } from "@/lib/types";
+import { recitationToSavedRecitation } from "@/lib/types";
+import {
+  getRecitationBookmarks,
+  getRecitationBookmarksDetailed,
+  toggleBookmark,
+  type Bookmark,
+} from "@/lib/bookmark-manager";
 import { Amiri } from "next/font/google";
 import {
   FiEdit,
@@ -26,7 +32,18 @@ import {
   FiVolume,
   FiVolume1,
   FiVolumeX,
+  FiBookmark,
+  FiMoreVertical,
+  FiClock,
 } from "react-icons/fi";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   getVersesBySurah,
   getMushafPagesForSurah,
@@ -44,10 +61,10 @@ interface Ayah {
 
 export default function QuranReaderPage() {
   const params = useParams();
-  const projectId = params.projectId as string;
+  const recitationId = params.recitationId as string;
   const { user } = useAuth();
 
-  const [project, setProject] = useState<SavedProject | null>(null);
+  const [recitation, setRecitation] = useState<SavedRecitation | null>(null);
   const [ayahs, setAyahs] = useState<Ayah[]>([]);
   const [mushafVerses, setMushafVerses] = useState<Verse[]>([]);
   const [viewMode, setViewMode] = useState<"list" | "mushaf">("list");
@@ -63,15 +80,61 @@ export default function QuranReaderPage() {
   const [isLooping, setIsLooping] = useState(false);
   const [isLoopingAyah, setIsLoopingAyah] = useState(false);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+  const [savedAyahNumbers, setSavedAyahNumbers] = useState<number[]>([]); // Track where user left off
+  const [showSavedIndicator, setShowSavedIndicator] = useState(true); // Control saved position indicator
+  const [bookmarkedAyahs, setBookmarkedAyahs] = useState<number[]>([]); // Track bookmarked ayahs
+  const [bookmarksDetailed, setBookmarksDetailed] = useState<Bookmark[]>([]); // Track detailed bookmark info for dropdown
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const ayahRefs = useRef<(HTMLDivElement | HTMLSpanElement | null)[]>([]);
   const volumeRef = useRef<HTMLDivElement>(null);
+  const audioLoadedRef = useRef(false); // Track if audio has been loaded in this session
+  const hasRestoredPositionRef = useRef(false); // Track if we've restored the saved position
+  const savedPositionTimeRef = useRef<number>(0); // Store the exact time to restore to
 
   // Detect if device is iOS/iPadOS where volume control is not supported
   const isIOS =
     typeof window !== "undefined" &&
     /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  // Load global settings from localStorage on mount
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Load global volume setting (default: 1)
+    const savedVolume = localStorage.getItem("quran-reader-volume");
+    if (savedVolume) {
+      const vol = parseFloat(savedVolume);
+      setVolume(vol);
+      if (audioRef.current) {
+        audioRef.current.volume = vol;
+      }
+    }
+
+    // Load global playback speed setting (default: 1)
+    const savedSpeed = localStorage.getItem("quran-reader-speed");
+    if (savedSpeed) {
+      const speed = parseFloat(savedSpeed);
+      setPlaybackRate(speed);
+      if (audioRef.current) {
+        audioRef.current.playbackRate = speed;
+      }
+    }
+  }, []);
+
+  // Save current position to localStorage whenever currentAyahNumbers changes
+  useEffect(() => {
+    if (typeof window === "undefined" || !recitationId || currentAyahNumbers.length === 0) return;
+
+    const positionKey = `quran-reader-position-${recitationId}`;
+    localStorage.setItem(
+      positionKey,
+      JSON.stringify({
+        ayahNumbers: currentAyahNumbers,
+        timestamp: Date.now(),
+      })
+    );
+  }, [currentAyahNumbers, recitationId]);
 
   // Convert to Arabic-Indic numerals
   const toArabicNumerals = (num: number): string => {
@@ -100,10 +163,17 @@ export default function QuranReaderPage() {
     return text.replace(/<sup[^>]*>.*?<\/sup>/g, "");
   };
 
-  // Load audio from S3
+  // Load audio from S3 - only once per session
   const loadAudioFromS3 = useCallback(async (url: string, fileName: string) => {
+    // Check if audio has already been loaded in this session
+    if (audioLoadedRef.current) {
+      console.log("📻 [Reader] Audio already loaded, skipping fetch");
+      return null;
+    }
+
     try {
       setIsFetchingAudio(true);
+      console.log("📻 [Reader] Loading audio from S3...");
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -117,6 +187,11 @@ export default function QuranReaderPage() {
       if (audioRef.current) {
         audioRef.current.src = URL.createObjectURL(file);
       }
+
+      // Mark audio as loaded for this session
+      audioLoadedRef.current = true;
+      console.log("✅ [Reader] Audio loaded successfully");
+
       return file;
     } catch (error) {
       console.error("❌ [Reader] Failed to load audio from S3:", error);
@@ -127,37 +202,37 @@ export default function QuranReaderPage() {
     }
   }, []);
 
-  // Load project
+  // Load recitation
   useEffect(() => {
-    const loadProjectData = async () => {
+    const loadRecitationData = async () => {
       if (!user) {
-        alert("Please sign in to access this project");
+        alert("Please sign in to access this recitation");
         return;
       }
 
       // Load from Supabase
-      const recitation = await getRecitation(projectId);
-      if (!recitation) {
-        alert("Project not found. It may have been deleted.");
+      const recitationData = await getRecitation(recitationId);
+      if (!recitationData) {
+        alert("Recitation not found. It may have been deleted.");
         return;
       }
 
-      const loadedProject = recitationToSavedProject(recitation);
-      console.log("Project loaded from Supabase for reader");
+      const loadedRecitation = recitationToSavedRecitation(recitationData);
+      console.log("Recitation loaded from Supabase for reader");
 
-      if (loadedProject) {
-        setProject(loadedProject);
+      if (loadedRecitation) {
+        setRecitation(loadedRecitation);
 
         // Auto-load audio from S3 if available
-        if (loadedProject.audioUrl) {
+        if (loadedRecitation.audioUrl) {
           loadAudioFromS3(
-            loadedProject.audioUrl,
-            loadedProject.fileName || loadedProject.audioFileName || "audio.mp3"
+            loadedRecitation.audioUrl,
+            loadedRecitation.fileName || loadedRecitation.audioFileName || "audio.mp3"
           );
         }
 
         // Fetch Quran text from LOCAL data (no API calls!)
-        const surahNumber = loadedProject.surahNumber;
+        const surahNumber = loadedRecitation.surahNumber;
 
         // Load for List View
         getVersesBySurah(surahNumber).then((verses) => {
@@ -191,6 +266,47 @@ export default function QuranReaderPage() {
             };
           });
           setAyahs(formattedAyahs);
+
+          // Load saved position from localStorage
+          if (recitationId) {
+            const positionKey = `quran-reader-position-${recitationId}`;
+            const savedPosition = localStorage.getItem(positionKey);
+
+            if (savedPosition) {
+              try {
+                const { ayahNumbers } = JSON.parse(savedPosition);
+
+                // Find the segment for the saved ayah
+                const segment = loadedRecitation.segments.find(
+                  (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
+                    seg.ayahNumbers?.some((num: number) => ayahNumbers.includes(num)) ||
+                    (seg.ayahNumber !== undefined && ayahNumbers.includes(seg.ayahNumber))
+                );
+
+                if (segment) {
+                  setSavedAyahNumbers(ayahNumbers);
+                  savedPositionTimeRef.current = segment.start;
+                  console.log("📍 [Reader] Found saved position:", ayahNumbers, "at time:", segment.start);
+                } else {
+                  console.log("⚠️ [Reader] Saved position segment not found");
+                }
+              } catch (error) {
+                console.error("Failed to load saved position:", error);
+              }
+            }
+
+            // Load bookmarks from Supabase
+            if (user) {
+              getRecitationBookmarks(user.id, recitationId).then((bookmarks) => {
+                setBookmarkedAyahs(bookmarks);
+                console.log("🔖 [Reader] Loaded bookmarks:", bookmarks);
+              });
+              getRecitationBookmarksDetailed(user.id, recitationId).then((detailedBookmarks) => {
+                setBookmarksDetailed(detailedBookmarks);
+                console.log("🔖 [Reader] Loaded detailed bookmarks:", detailedBookmarks);
+              });
+            }
+          }
         });
 
         // Load for Mushaf View
@@ -209,8 +325,8 @@ export default function QuranReaderPage() {
       }
     };
 
-    loadProjectData();
-  }, [projectId, user, loadAudioFromS3]);
+    loadRecitationData();
+  }, [recitationId, user, loadAudioFromS3]);
 
   // Audio event handlers
   const handleTimeUpdate = () => {
@@ -218,12 +334,12 @@ export default function QuranReaderPage() {
       const time = audioRef.current.currentTime;
       setCurrentTime(time);
 
-      // Find current ayah based on project segments
-      if (project?.segments) {
+      // Find current ayah based on recitation segments
+      if (recitation?.segments) {
         // For ayah looping, we need to check if we're past a segment end
         // BEFORE we try to find the current segment (which would fail if time >= seg.end)
         if (isLoopingAyah && currentAyahNumbers.length > 0) {
-          const loopSegment = project.segments.find(
+          const loopSegment = recitation.segments.find(
             (seg: {
               ayahNumbers?: number[];
               ayahNumber?: number;
@@ -253,7 +369,7 @@ export default function QuranReaderPage() {
           }
         }
 
-        const currentSegment = project.segments.find(
+        const currentSegment = recitation.segments.find(
           (seg: { start: number; end: number }) =>
             time >= seg.start && time < seg.end
         );
@@ -312,20 +428,81 @@ export default function QuranReaderPage() {
     }
   };
 
+  // Handle when audio is ready to play - restore position here for better reliability
+  const handleCanPlay = useCallback(() => {
+    if (!audioRef.current) return;
+
+    // Restore saved position if available (only once)
+    if (!hasRestoredPositionRef.current && savedPositionTimeRef.current > 0 && savedAyahNumbers.length > 0) {
+      console.log("📍 [Reader] Attempting to restore position to:", savedAyahNumbers, "at time:", savedPositionTimeRef.current);
+
+      // Mark as restored FIRST to prevent multiple attempts
+      hasRestoredPositionRef.current = true;
+
+      // Set the audio position
+      audioRef.current.currentTime = savedPositionTimeRef.current;
+
+      // Highlight the saved ayah
+      setCurrentAyahNumbers(savedAyahNumbers);
+
+      console.log("✅ [Reader] Position restored successfully");
+
+      // Scroll to the saved ayah after a short delay
+      setTimeout(() => {
+        const ayahIndex = ayahs.findIndex((a) => savedAyahNumbers.includes(a.numberInSurah));
+        if (ayahIndex >= 0 && ayahRefs.current[ayahIndex]) {
+          ayahRefs.current[ayahIndex]?.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
+        }
+      }, 300);
+    }
+  }, [savedAyahNumbers, ayahs]);
+
+  // Prevent audio from seeking back to 0 after restoration
+  const handleSeeking = useCallback(() => {
+    if (!audioRef.current) return;
+
+    // If we've restored the position and user hasn't interacted yet, enforce the saved position
+    if (hasRestoredPositionRef.current && !isPlaying && savedPositionTimeRef.current > 0) {
+      const currentTime = audioRef.current.currentTime;
+
+      // If something tries to seek away from our saved position (like back to 0), prevent it
+      if (Math.abs(currentTime - savedPositionTimeRef.current) > 0.5 && currentTime < 1) {
+        console.log("🛡️ [Reader] Prevented unwanted seek, restoring to:", savedPositionTimeRef.current);
+        audioRef.current.currentTime = savedPositionTimeRef.current;
+      }
+    }
+  }, [isPlaying]);
+
   const handlePlayPause = useCallback(() => {
     if (audioRef.current) {
       if (isPlaying) {
         audioRef.current.pause();
       } else {
+        // Before playing, ensure we're at the saved position if it hasn't been restored yet
+        if (!hasRestoredPositionRef.current && savedPositionTimeRef.current > 0) {
+          audioRef.current.currentTime = savedPositionTimeRef.current;
+          setCurrentAyahNumbers(savedAyahNumbers);
+          hasRestoredPositionRef.current = true;
+        }
+
         audioRef.current.play();
+
+        // Hide the saved indicator once user starts playing
+        setShowSavedIndicator(false);
+
+        // Clear the saved position enforcement once user starts playing
+        savedPositionTimeRef.current = 0;
       }
       setIsPlaying(!isPlaying);
     }
-  }, [isPlaying]);
+  }, [isPlaying, savedAyahNumbers]);
 
   const handleEnded = () => {
-    if (isLoopingAyah && project?.segments && currentAyahNumbers.length > 0) {
-      const currentSegment = project.segments.find(
+    if (isLoopingAyah && recitation?.segments && currentAyahNumbers.length > 0) {
+      const currentSegment = recitation.segments.find(
         (seg: {
           ayahNumbers?: number[];
           ayahNumber?: number;
@@ -367,9 +544,9 @@ export default function QuranReaderPage() {
   };
 
   const handleNextAyah = () => {
-    if (!project?.segments || currentAyahNumbers.length === 0) return;
+    if (!recitation?.segments || currentAyahNumbers.length === 0) return;
 
-    const currentIndex = project.segments.findIndex(
+    const currentIndex = recitation.segments.findIndex(
       (seg: { ayahNumbers?: number[]; ayahNumber?: number }) =>
         seg.ayahNumbers?.some((num: number) =>
           currentAyahNumbers.includes(num)
@@ -378,8 +555,8 @@ export default function QuranReaderPage() {
           currentAyahNumbers.includes(seg.ayahNumber))
     );
 
-    if (currentIndex < project.segments.length - 1 && audioRef.current) {
-      const nextSegment = project.segments[currentIndex + 1];
+    if (currentIndex < recitation.segments.length - 1 && audioRef.current) {
+      const nextSegment = recitation.segments[currentIndex + 1];
 
       // Update currentAyahNumbers for the next ayah (important for looping)
       let ayahNums: number[] = [];
@@ -401,9 +578,9 @@ export default function QuranReaderPage() {
   };
 
   const handlePrevAyah = () => {
-    if (!project?.segments || currentAyahNumbers.length === 0) return;
+    if (!recitation?.segments || currentAyahNumbers.length === 0) return;
 
-    const currentIndex = project.segments.findIndex(
+    const currentIndex = recitation.segments.findIndex(
       (seg: { ayahNumbers?: number[]; ayahNumber?: number }) =>
         seg.ayahNumbers?.some((num: number) =>
           currentAyahNumbers.includes(num)
@@ -413,7 +590,7 @@ export default function QuranReaderPage() {
     );
 
     if (currentIndex > 0 && audioRef.current) {
-      const prevSegment = project.segments[currentIndex - 1];
+      const prevSegment = recitation.segments[currentIndex - 1];
 
       // Update currentAyahNumbers for the previous ayah (important for looping)
       let ayahNums: number[] = [];
@@ -444,6 +621,11 @@ export default function QuranReaderPage() {
         console.warn("⚠️ Volume control not supported on this device:", error);
       }
     }
+
+    // Save to localStorage for global persistence
+    if (typeof window !== "undefined") {
+      localStorage.setItem("quran-reader-volume", newVolume.toString());
+    }
   };
 
   const getVolumeIcon = () => {
@@ -458,12 +640,17 @@ export default function QuranReaderPage() {
     if (audioRef.current) {
       audioRef.current.playbackRate = speed;
     }
+
+    // Save to localStorage for global persistence
+    if (typeof window !== "undefined") {
+      localStorage.setItem("quran-reader-speed", speed.toString());
+    }
   };
 
   const handleAyahClick = (ayahNumber: number) => {
-    if (!project?.segments || !audioRef.current) return;
+    if (!recitation?.segments || !audioRef.current) return;
 
-    const segment = project.segments.find(
+    const segment = recitation.segments.find(
       (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
         seg.ayahNumbers?.includes(ayahNumber) || seg.ayahNumber === ayahNumber
     );
@@ -489,11 +676,114 @@ export default function QuranReaderPage() {
       }
 
       audioRef.current.currentTime = segment.start;
+
+      // Hide saved indicator when user manually selects an ayah
+      setShowSavedIndicator(false);
+
+      // Clear the saved position enforcement when user manually jumps
+      savedPositionTimeRef.current = 0;
+
       if (!isPlaying) {
         audioRef.current.play();
         setIsPlaying(true);
       }
     }
+  };
+
+  // Toggle bookmark for an ayah
+  const handleToggleBookmark = async (ayahNumber: number) => {
+    if (!user || !recitationId) return;
+
+    const isBookmarked = bookmarkedAyahs.includes(ayahNumber);
+
+    // Optimistically update UI
+    if (isBookmarked) {
+      setBookmarkedAyahs(bookmarkedAyahs.filter((num) => num !== ayahNumber));
+    } else {
+      setBookmarkedAyahs([...bookmarkedAyahs, ayahNumber].sort((a, b) => a - b));
+    }
+
+    // Update in Supabase
+    const result = await toggleBookmark(
+      user.id,
+      recitationId,
+      ayahNumber,
+      isBookmarked
+    );
+
+    if (!result.success) {
+      // Revert on error
+      if (isBookmarked) {
+        setBookmarkedAyahs([...bookmarkedAyahs, ayahNumber].sort((a, b) => a - b));
+      } else {
+        setBookmarkedAyahs(bookmarkedAyahs.filter((num) => num !== ayahNumber));
+      }
+      console.error("Failed to toggle bookmark:", result.error);
+    } else {
+      // Reload detailed bookmarks after successful update
+      getRecitationBookmarksDetailed(user.id, recitationId).then((detailedBookmarks) => {
+        setBookmarksDetailed(detailedBookmarks);
+      });
+    }
+  };
+
+  // Jump to a specific ayah (for bookmarks and last played)
+  const handleJumpToAyah = (ayahNumber: number) => {
+    if (!recitation || !audioRef.current) return;
+
+    // Find the segment that contains this ayah
+    const segment = recitation.segments.find((seg) =>
+      seg.ayahs.includes(ayahNumber)
+    );
+
+    if (!segment) {
+      console.warn("No segment found for ayah:", ayahNumber);
+      return;
+    }
+
+    // Set audio to the start of this segment
+    audioRef.current.currentTime = segment.start;
+    setCurrentAyahNumbers(segment.ayahs);
+
+    // Scroll to the ayah
+    const ayahIndex = ayahs.findIndex((a) => a.numberInSurah === ayahNumber);
+    if (ayahIndex >= 0 && ayahRefs.current[ayahIndex]) {
+      ayahRefs.current[ayahIndex]?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
+
+    // Auto-play after jumping
+    audioRef.current.play();
+    setIsPlaying(true);
+  };
+
+  // Jump to last played position
+  const handleJumpToLastPlayed = () => {
+    if (!audioRef.current || savedPositionTimeRef.current === 0) return;
+
+    audioRef.current.currentTime = savedPositionTimeRef.current;
+    setCurrentAyahNumbers(savedAyahNumbers);
+
+    // Scroll to the saved ayah
+    if (savedAyahNumbers.length > 0) {
+      const firstSavedAyah = savedAyahNumbers[0];
+      const ayahIndex = ayahs.findIndex((a) => a.numberInSurah === firstSavedAyah);
+      if (ayahIndex >= 0 && ayahRefs.current[ayahIndex]) {
+        ayahRefs.current[ayahIndex]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      }
+    }
+
+    // Hide the saved indicator after jumping
+    setShowSavedIndicator(false);
+
+    // Auto-play after jumping
+    audioRef.current.play();
+    setIsPlaying(true);
   };
 
   // Click outside to close volume slider
@@ -532,15 +822,15 @@ export default function QuranReaderPage() {
     return () => window.removeEventListener("keydown", handleKeyPress);
   }, [handlePlayPause]);
 
-  if (!project) {
+  if (!recitation) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <p className="text-muted-foreground">Loading project...</p>
+        <p className="text-muted-foreground">Loading recitation...</p>
       </div>
     );
   }
 
-  const surahInfo = SURAHS.find((s) => s.number === project.surahNumber);
+  const surahInfo = SURAHS.find((s) => s.number === recitation.surahNumber);
   const speedOptions = [
     0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2,
   ];
@@ -553,12 +843,12 @@ export default function QuranReaderPage() {
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
             <div className="min-w-0 flex-1">
               <h1 className="text-lg sm:text-2xl font-bold truncate">
-                {project.name}
+                {recitation.name}
               </h1>
               <p className="text-xs sm:text-sm text-muted-foreground truncate">
                 {surahInfo
                   ? `Surah ${surahInfo.number}: ${surahInfo.transliteration} (${surahInfo.translation})`
-                  : `Surah ${project.surahNumber}`}
+                  : `Surah ${recitation.surahNumber}`}
               </p>
             </div>
 
@@ -611,17 +901,105 @@ export default function QuranReaderPage() {
                 )}
               </div>
 
-              {/* Action buttons */}
-              <div className=" gap-1 sm:gap-2 hidden md:flex">
-                <Link href={`/editor/${project.id}`}>
-                  <Button
-                    variant="outline"
-                    className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
-                  >
-                    <FiEdit className="h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Edit</span>
-                  </Button>
-                </Link>
+              {/* Action buttons / Menu */}
+              <div className="gap-1 sm:gap-2 flex">
+                <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
+                    >
+                      <FiMoreVertical className="h-3 w-3 sm:h-4 sm:w-4" />
+                      <span className="hidden sm:inline">Menu</span>
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64" sideOffset={8}>
+                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+
+                    {/* Edit */}
+                    <Link href={`/editor/${recitation.id}`}>
+                      <DropdownMenuItem className="cursor-pointer">
+                        <FiEdit className="mr-2 h-4 w-4" />
+                        <span>Edit Recitation</span>
+                      </DropdownMenuItem>
+                    </Link>
+
+                    {/* Translation Toggle */}
+                    {viewMode === "list" && (
+                      <DropdownMenuItem
+                        className="cursor-pointer"
+                        onClick={() => setShowTranslation(!showTranslation)}
+                      >
+                        <FiBook className="mr-2 h-4 w-4" />
+                        <span>{showTranslation ? "Hide" : "Show"} Translation</span>
+                      </DropdownMenuItem>
+                    )}
+
+                    {/* Last Played Position */}
+                    {savedAyahNumbers.length > 0 && showSavedIndicator && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-amber-600">
+                          Last Played
+                        </DropdownMenuLabel>
+                        <DropdownMenuItem
+                          className="cursor-pointer"
+                          onClick={handleJumpToLastPlayed}
+                        >
+                          <FiClock className="mr-2 h-4 w-4 text-amber-500" />
+                          <div className="flex flex-col">
+                            <span>Ayah {savedAyahNumbers.join(", ")}</span>
+                            <span className="text-xs text-muted-foreground">
+                              Click to continue
+                            </span>
+                          </div>
+                        </DropdownMenuItem>
+                      </>
+                    )}
+
+                    {/* Bookmarks */}
+                    {bookmarksDetailed.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-purple-600">
+                          Bookmarks ({bookmarksDetailed.length})
+                        </DropdownMenuLabel>
+                        <div className="max-h-48 overflow-y-auto">
+                          {bookmarksDetailed.map((bookmark) => (
+                            <DropdownMenuItem
+                              key={bookmark.id}
+                              className="cursor-pointer"
+                              onClick={() => handleJumpToAyah(bookmark.ayah_number)}
+                            >
+                              <FiBookmark className="mr-2 h-4 w-4 text-purple-500 fill-current" />
+                              <div className="flex flex-col">
+                                <span>Ayah {bookmark.ayah_number}</span>
+                                <span className="text-xs text-muted-foreground">
+                                  {new Date(bookmark.created_at).toLocaleDateString("en-US", {
+                                    month: "short",
+                                    day: "numeric",
+                                    year: "numeric",
+                                  })}
+                                </span>
+                              </div>
+                            </DropdownMenuItem>
+                          ))}
+                        </div>
+                      </>
+                    )}
+
+                    {/* No bookmarks message */}
+                    {bookmarksDetailed.length === 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="text-muted-foreground">
+                          No bookmarks yet
+                        </DropdownMenuLabel>
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
           </div>
@@ -643,7 +1021,7 @@ export default function QuranReaderPage() {
             <p className="text-lg text-muted-foreground">
               {surahInfo?.transliteration} • {surahInfo?.ayahs} Ayahs
             </p>
-            {project.surahNumber !== 1 && project.surahNumber !== 9 && (
+            {recitation.surahNumber !== 1 && recitation.surahNumber !== 9 && (
               <p
                 className={`text-xl sm:text-2xl md:text-3xl mt-6 ${amiri.className}`}
                 dir="rtl"
@@ -661,6 +1039,12 @@ export default function QuranReaderPage() {
                 const isActive = currentAyahNumbers.includes(
                   ayah.numberInSurah
                 );
+                const isSavedPosition = savedAyahNumbers.includes(
+                  ayah.numberInSurah
+                ) && showSavedIndicator;
+                const isBookmarked = bookmarkedAyahs.includes(
+                  ayah.numberInSurah
+                );
 
                 return (
                   <div
@@ -670,16 +1054,45 @@ export default function QuranReaderPage() {
                     }}
                     className={`
                     py-6 transition-all duration-300 cursor-pointer
-                    border-b border-border/40
+                    border-b border-border/40 relative
                     ${isActive ? "bg-primary/5" : "hover:bg-muted/30"}
+                    ${isSavedPosition ? "border-l-4 border-l-amber-500" : ""}
+                    ${isBookmarked ? "border-l-4 border-l-purple-500 bg-purple-50/30" : ""}
                   `}
                     onClick={() => handleAyahClick(ayah.numberInSurah)}
                   >
+                    {isSavedPosition && (
+                      <div className="absolute -left-2 bottom-6 bg-amber-500 text-white text-xs px-2 py-1 rounded-r shadow-sm flex items-center gap-1">
+                        <FiInfo className="h-3 w-3" />
+                        <span>Last played</span>
+                      </div>
+                    )}
+                    {isBookmarked && (
+                      <div className="absolute -right-2 top-6 bg-purple-500 text-white text-xs px-2 py-1 rounded-l shadow-sm flex items-center gap-1">
+                        <FiBookmark className="h-3 w-3" />
+                        <span>Bookmarked</span>
+                      </div>
+                    )}
                     <div className="flex items-start gap-3 px-2">
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-xs text-muted-foreground opacity-60">
-                          {project.surahNumber}:{ayah.numberInSurah}
+                          {recitation.surahNumber}:{ayah.numberInSurah}
                         </span>
+                        {/* Bookmark button */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleBookmark(ayah.numberInSurah);
+                          }}
+                          className={`mt-2 p-1.5 rounded hover:bg-purple-100 transition-colors ${
+                            isBookmarked ? "text-purple-600" : "text-gray-400"
+                          }`}
+                          title={isBookmarked ? "Remove bookmark" : "Add bookmark"}
+                        >
+                          <FiBookmark
+                            className={`h-4 w-4 ${isBookmarked ? "fill-current" : ""}`}
+                          />
+                        </button>
                       </div>
                       <div className="flex-1 space-y-3">
                         <p
@@ -848,6 +1261,12 @@ export default function QuranReaderPage() {
                                         currentAyahNumbers.includes(
                                           verseNumber
                                         );
+                                      const isSavedPosition = savedAyahNumbers.includes(
+                                        verseNumber
+                                      ) && showSavedIndicator;
+                                      const isBookmarked = bookmarkedAyahs.includes(
+                                        verseNumber
+                                      );
 
                                       return (
                                         <span
@@ -872,6 +1291,8 @@ export default function QuranReaderPage() {
                                                 ? "bg-primary/10 text-primary font-semibold"
                                                 : "hover:bg-muted/30"
                                             }
+                                            ${isSavedPosition ? "bg-amber-100 border-2 border-amber-500" : ""}
+                                            ${isBookmarked ? "bg-purple-100/50 border-2 border-purple-500" : ""}
                                           `}
                                         >
                                           {words.map((item, idx) => (
@@ -925,18 +1346,39 @@ export default function QuranReaderPage() {
             <div className="space-y-1.5 sm:space-y-2">
               {/* Progress Bar */}
               <div className="flex items-center gap-2 sm:gap-3">
-                <input
-                  type="range"
-                  min="0"
-                  max={duration || 0}
-                  value={currentTime}
-                  onChange={(e) => {
-                    if (audioRef.current) {
-                      audioRef.current.currentTime = parseFloat(e.target.value);
-                    }
-                  }}
-                  className="flex-1 cursor-pointer h-2 bg-muted rounded-lg appearance-none"
-                />
+                <div className="flex-1 relative">
+                  <input
+                    type="range"
+                    min="0"
+                    max={duration || 0}
+                    value={currentTime}
+                    onChange={(e) => {
+                      if (audioRef.current) {
+                        audioRef.current.currentTime = parseFloat(e.target.value);
+                      }
+                    }}
+                    className="w-full cursor-pointer h-2 bg-muted rounded-lg appearance-none"
+                  />
+                  {/* Bookmark markers on progress bar */}
+                  {recitation?.segments && bookmarkedAyahs.map((ayahNum) => {
+                    const segment = recitation.segments.find(
+                      (seg: { ayahNumbers?: number[]; ayahNumber?: number; start: number }) =>
+                        seg.ayahNumbers?.includes(ayahNum) || seg.ayahNumber === ayahNum
+                    );
+                    if (!segment || !duration) return null;
+
+                    const position = (segment.start / duration) * 100;
+
+                    return (
+                      <div
+                        key={`bookmark-marker-${ayahNum}`}
+                        className="absolute top-0 w-1 h-2 bg-purple-500 rounded-full pointer-events-none"
+                        style={{ left: `${position}%` }}
+                        title={`Bookmark: Ayah ${ayahNum}`}
+                      />
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Controls */}
@@ -1067,6 +1509,8 @@ export default function QuranReaderPage() {
         loop={isLooping}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
+        onCanPlay={handleCanPlay}
+        onSeeking={handleSeeking}
         onEnded={handleEnded}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}

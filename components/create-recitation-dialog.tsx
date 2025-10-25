@@ -37,15 +37,15 @@ import type { FinalSegment, UserReciter } from "@/lib/types";
 import { useAuth } from "@/contexts/auth-context";
 import { createRecitation, getReciters } from "@/lib/supabase-storage";
 
-interface CreateProjectDialogProps {
+interface CreateRecitationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export default function CreateProjectDialog({
+export default function CreateRecitationDialog({
   open,
   onOpenChange,
-}: CreateProjectDialogProps) {
+}: CreateRecitationDialogProps) {
   const router = useRouter();
   const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -262,11 +262,11 @@ export default function CreateProjectDialog({
     setIsCreating(true);
 
     try {
-      // Initialize project with uploaded audio
+      // Initialize recitation with uploaded audio
       const surahInfo = SURAHS.find((s) => s.number === selectedSurah);
 
       if (!user) {
-        alert("Please sign in to create a project");
+        alert("Please sign in to create a recitation");
         return;
       }
 
@@ -313,8 +313,8 @@ export default function CreateProjectDialog({
         }
       }, 100);
     } catch (error) {
-      console.error("❌ [Create] Failed to create project:", error);
-      alert("Failed to create project. Please try again.");
+      console.error("❌ [Create] Failed to create recitation:", error);
+      alert("Failed to create recitation. Please try again.");
     } finally {
       setIsCreating(false);
     }
@@ -397,10 +397,10 @@ export default function CreateProjectDialog({
       <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <FiUpload /> Create New Project
+            <FiUpload /> Create New Recitation
           </DialogTitle>
           <DialogDescription>
-            Upload an MP3 file to create a new Quran splitting project
+            Upload an MP3 file to create a new Quran recitation
           </DialogDescription>
         </DialogHeader>
 
@@ -624,7 +624,7 @@ export default function CreateProjectDialog({
 
                         {reciterName && (
                           <p className="text-xs text-muted-foreground">
-                            Project will be named:{" "}
+                            Recitation will be named:{" "}
                             <span className="font-medium">
                               {reciterName.trim()} -{" "}
                               {
@@ -731,7 +731,7 @@ export default function CreateProjectDialog({
               </>
             ) : (
               <>
-                <FiCheckCircle /> Create Project
+                <FiCheckCircle /> Create Recitation
               </>
             )}
           </Button>
@@ -746,7 +746,7 @@ export default function CreateProjectDialog({
               <FiAlertTriangle /> Unsaved Changes
             </DialogTitle>
             <DialogDescription>
-              You have uploaded content and project details that will be lost if
+              You have uploaded content and recitation details that will be lost if
               you close this dialog.
             </DialogDescription>
           </DialogHeader>
@@ -830,7 +830,7 @@ export default function CreateProjectDialog({
               <FiPlus /> Add New Reciter
             </DialogTitle>
             <DialogDescription>
-              Enter the name of the reciter for this project
+              Enter the name of the reciter for this recitation
             </DialogDescription>
           </DialogHeader>
 

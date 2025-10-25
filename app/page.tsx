@@ -7,7 +7,7 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    // Redirect to library (project selection)
+    // Redirect to library (recitation selection)
     router.push("/library");
   }, [router]);
 

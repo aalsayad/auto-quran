@@ -33,12 +33,12 @@ import { splitAudioIntoAyahs, loadFFmpeg } from "@/lib/audio-splitter";
 import { detectSilenceSegments } from "@/lib/silence-detector";
 import { fetchSurahText } from "@/lib/quran-api";
 import WaveformEditor from "@/components/waveform-editor";
-import type { SavedProject } from "@/lib/types";
+import type { SavedRecitation } from "@/lib/types";
 import { useAuth } from "@/contexts/auth-context";
 import { getRecitation, updateRecitation } from "@/lib/supabase-storage";
 import {
-  recitationToSavedProject,
-  savedProjectToRecitation,
+  recitationToSavedRecitation,
+  savedRecitationToRecitation,
   type AyahText,
 } from "@/lib/types";
 import {
@@ -78,7 +78,7 @@ interface Segment {
 
 export default function AudioUploader() {
   const params = useParams();
-  const projectId = params.projectId as string;
+  const recitationId = params.recitationId as string;
   const { user, session } = useAuth();
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null); // S3 URL for uploaded audio
@@ -108,12 +108,14 @@ export default function AudioUploader() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Save/Load state
-  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
-  const [projectName, setProjectName] = useState<string>("");
+  const [currentRecitationId, setCurrentRecitationId] = useState<string | null>(
+    null
+  );
+  const [recitationName, setRecitationName] = useState<string>("");
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
-  const [newProjectName, setNewProjectName] = useState("");
+  const [newRecitationName, setNewRecitationName] = useState("");
   const [whisperTranscription, setWhisperTranscription] = useState<{
     segments: { start: number; end: number; text: string }[];
     text: string;
@@ -125,28 +127,31 @@ export default function AudioUploader() {
   const [tokenBalance, setTokenBalance] = useState<number>(0);
 
   // Save function for Supabase only
-  const saveProjectUniversal = async (projectData: SavedProject) => {
+  const saveRecitationUniversal = async (recitationData: SavedRecitation) => {
     if (!user) {
-      throw new Error("User must be authenticated to save projects");
+      throw new Error("User must be authenticated to save recitations");
     }
 
     // Save to Supabase
-    const recitationData = savedProjectToRecitation(projectData, user.id);
-    await updateRecitation(projectData.id, {
-      ...recitationData,
+    const recitationDbData = savedRecitationToRecitation(
+      recitationData,
+      user.id
+    );
+    await updateRecitation(recitationData.id, {
+      ...recitationDbData,
       transcription_data: {
-        segments: projectData.segments,
-        ayah_texts: projectData.ayahTexts,
-        whisper: projectData.whisperTranscription,
+        segments: recitationData.segments,
+        ayah_texts: recitationData.ayahTexts,
+        whisper: recitationData.whisperTranscription,
       },
       settings_data: {
-        silence_threshold: projectData.silenceThreshold,
-        min_silence_duration: projectData.minSilenceDuration,
-        end_padding: projectData.endPadding,
-        start_padding: projectData.startPadding,
+        silence_threshold: recitationData.silenceThreshold,
+        min_silence_duration: recitationData.minSilenceDuration,
+        end_padding: recitationData.endPadding,
+        start_padding: recitationData.startPadding,
       },
     });
-    console.log("✅ Saved to Supabase:", projectData.id);
+    console.log("✅ Saved to Supabase:", recitationData.id);
   };
 
   // UNUSED - Legacy function (keeping for reference)
@@ -204,9 +209,9 @@ export default function AudioUploader() {
         }
       }
 
-      // Only clear segments if NOT loading a saved project
-      // If we have a loaded project with segments, keep them
-      if (!currentProjectId || segments.length === 0) {
+      // Only clear segments if NOT loading a saved recitation
+      // If we have a loaded recitation with segments, keep them
+      if (!currentRecitationId || segments.length === 0) {
         setSegments([]);
         setOriginalSegments([]);
         setAyahTexts([]);
@@ -218,8 +223,8 @@ export default function AudioUploader() {
           setSelectedSurah(detected);
         }
       } else {
-        // Loaded project - audio file attached, ready to download
-        console.log("📂 [Upload] Audio file attached to loaded project");
+        // Loaded recitation - audio file attached, ready to download
+        console.log("📂 [Upload] Audio file attached to loaded recitation");
       }
     }
   };
@@ -342,72 +347,81 @@ export default function AudioUploader() {
     [audioFile]
   );
 
-  // Load project from URL params
+  // Load recitation from URL params
   useEffect(() => {
-    const loadProject = async () => {
-      if (!projectId) return;
+    const loadRecitation = async () => {
+      if (!recitationId) return;
       if (!user) {
         console.log("⏳ Waiting for user authentication...");
         return;
       }
 
-      console.log("Loading project:", projectId);
+      console.log("Loading recitation:", recitationId);
 
       // Load from Supabase
-      const recitation = await getRecitation(projectId);
+      const recitation = await getRecitation(recitationId);
       if (!recitation) {
-        console.log("Project not found for ID:", projectId);
-        alert("Project not found. It may have been deleted.");
+        console.log("Recitation not found for ID:", recitationId);
+        alert("Recitation not found. It may have been deleted.");
         return;
       }
 
-      const project = recitationToSavedProject(recitation);
-      console.log("Project loaded from Supabase:", project);
+      const loadedRecitation = recitationToSavedRecitation(recitation);
+      console.log("Recitation loaded from Supabase:", loadedRecitation);
 
-      if (project) {
-        // Load project data
-        setCurrentProjectId(project.id);
-        setProjectName(project.name);
-        setSelectedSurah(project.surahNumber);
-        setSegments(project.segments);
-        setOriginalSegments(project.segments);
-        setAyahTexts(project.ayahTexts || []);
-        if (project.silenceThreshold)
-          setSilenceThreshold(project.silenceThreshold);
-        if (project.minSilenceDuration)
-          setMinSilenceDuration(project.minSilenceDuration);
-        if (project.endPadding !== undefined) setEndPadding(project.endPadding);
-        if (project.startPadding !== undefined)
-          setStartPadding(project.startPadding);
-        if (project.whisperTranscription) {
-          setWhisperTranscription(project.whisperTranscription);
+      if (loadedRecitation) {
+        // Load recitation data
+        setCurrentRecitationId(loadedRecitation.id);
+        setRecitationName(loadedRecitation.name);
+        setSelectedSurah(loadedRecitation.surahNumber);
+        setSegments(loadedRecitation.segments || []);
+        setOriginalSegments(loadedRecitation.segments || []);
+        setAyahTexts(loadedRecitation.ayahTexts || []);
+        if (loadedRecitation.silenceThreshold)
+          setSilenceThreshold(loadedRecitation.silenceThreshold);
+        if (loadedRecitation.minSilenceDuration)
+          setMinSilenceDuration(loadedRecitation.minSilenceDuration);
+        if (loadedRecitation.endPadding !== undefined)
+          setEndPadding(loadedRecitation.endPadding);
+        if (loadedRecitation.startPadding !== undefined)
+          setStartPadding(loadedRecitation.startPadding);
+        if (loadedRecitation.whisperTranscription) {
+          setWhisperTranscription(loadedRecitation.whisperTranscription);
           console.log(
-            `♻️ Loaded cached Whisper from localStorage (${project.whisperTranscription.segments.length} segments) - re-mapping is cheap!`
+            `♻️ Loaded cached Whisper from localStorage (${loadedRecitation.whisperTranscription.segments.length} segments) - re-mapping is cheap!`
           );
         }
 
         // Load audio file from S3 if URL exists
-        if (project.audioUrl) {
-          setAudioUrl(project.audioUrl);
-          console.log("📂 [Project] Audio URL found:", project.audioUrl);
+        if (loadedRecitation.audioUrl) {
+          setAudioUrl(loadedRecitation.audioUrl);
+          console.log(
+            "📂 [Project] Audio URL found:",
+            loadedRecitation.audioUrl
+          );
 
           // Auto-load audio ONLY if there are segments (waveform needs it)
           // This way we don't fetch on every navigation, only when necessary
-          if (project.segments && project.segments.length > 0) {
+          if (
+            loadedRecitation.segments &&
+            loadedRecitation.segments.length > 0
+          ) {
             console.log(
               "🎵 [Project] Has segments, auto-loading audio for waveform..."
             );
             loadAudioFromS3(
-              project.audioUrl,
-              project.fileName || project.audioFileName || "audio.mp3"
+              loadedRecitation.audioUrl,
+              loadedRecitation.fileName ||
+                loadedRecitation.audioFileName ||
+                "audio.mp3"
             );
           }
         }
       }
     };
 
-    loadProject();
-  }, [projectId, user, loadAudioFromS3]);
+    loadRecitation();
+  }, [recitationId, user, loadAudioFromS3]);
 
   // Load user's token balance
   useEffect(() => {
@@ -441,7 +455,7 @@ export default function AudioUploader() {
     if (audioFile) return audioFile;
     if (!audioUrl) return null;
 
-    const fileName = projectName || "audio.mp3";
+    const fileName = recitationName || "audio.mp3";
     return await loadAudioFromS3(audioUrl, fileName);
   };
 
@@ -532,48 +546,48 @@ export default function AudioUploader() {
       return;
     }
 
-    // If updating existing project, save directly without dialog
-    if (currentProjectId) {
+    // If updating existing recitation, save directly without dialog
+    if (currentRecitationId) {
       await handleSaveConfirm();
       return;
     }
 
-    // For new projects, show dialog to enter name
-    if (!projectName) {
+    // For new recitations, show dialog to enter name
+    if (!recitationName) {
       const surahInfo = SURAHS.find((s) => s.number === selectedSurah);
       const defaultName = `${
         surahInfo?.transliteration || `Surah ${selectedSurah}`
       } - ${new Date().toLocaleDateString()}`;
-      setProjectName(defaultName);
+      setRecitationName(defaultName);
     }
 
     setShowSaveDialog(true);
   };
 
   const handleSaveConfirm = async () => {
-    if (!projectName.trim() || !selectedSurah) return;
+    if (!recitationName.trim() || !selectedSurah) return;
 
     setIsSaving(true);
 
     try {
       const surahInfo = SURAHS.find((s) => s.number === selectedSurah);
       if (!user) {
-        alert("Please sign in to save projects");
+        alert("Please sign in to save recitations");
         return;
       }
 
-      // Get existing project data for dates
+      // Get existing recitation data for dates
       let existingCreatedAt = new Date().toISOString();
-      if (currentProjectId) {
-        const existing = await getRecitation(currentProjectId);
+      if (currentRecitationId) {
+        const existing = await getRecitation(currentRecitationId);
         if (existing) {
           existingCreatedAt = existing.created_at;
         }
       }
 
-      const project: SavedProject = {
-        id: currentProjectId || `project-${Date.now()}`,
-        name: projectName.trim(),
+      const recitation: SavedRecitation = {
+        id: currentRecitationId || `recitation-${Date.now()}`,
+        name: recitationName.trim(),
         fileName: audioFile?.name || "Unknown file",
         audioUrl: audioUrl || "", // Save S3 URL
         surahNumber: selectedSurah,
@@ -590,55 +604,55 @@ export default function AudioUploader() {
         whisperTranscription: whisperTranscription || undefined, // Cache Whisper transcription
       };
 
-      const isUpdating = !!currentProjectId;
+      const isUpdating = !!currentRecitationId;
 
-      await saveProjectUniversal(project);
-      setCurrentProjectId(project.id);
+      await saveRecitationUniversal(recitation);
+      setCurrentRecitationId(recitation.id);
       setShowSaveDialog(false);
 
       // Log what was saved
       if (whisperTranscription) {
         console.log(
-          `💾 Saved project with Whisper cache (${whisperTranscription.segments.length} segments)`
+          `💾 Saved recitation with Whisper cache (${whisperTranscription.segments.length} segments)`
         );
       }
 
       alert(
         isUpdating
-          ? "Project updated successfully!"
-          : "Project saved successfully!"
+          ? "Recitation updated successfully!"
+          : "Recitation saved successfully!"
       );
     } catch (error) {
-      console.error("Failed to save project:", error);
-      alert("Failed to save project. Please try again.");
+      console.error("Failed to save recitation:", error);
+      alert("Failed to save recitation. Please try again.");
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleOpenRename = () => {
-    if (currentProjectId) {
-      setNewProjectName(projectName);
+    if (currentRecitationId) {
+      setNewRecitationName(recitationName);
       setShowRenameDialog(true);
     }
   };
 
   const handleRename = async () => {
-    if (!currentProjectId || !newProjectName.trim() || !user) return;
+    if (!currentRecitationId || !newRecitationName.trim() || !user) return;
 
     try {
       // Update reciter_name in Supabase
-      const newReciterName = newProjectName.trim().split(" - ")[0];
-      await updateRecitation(currentProjectId, {
+      const newReciterName = newRecitationName.trim().split(" - ")[0];
+      await updateRecitation(currentRecitationId, {
         reciter_name: newReciterName,
       });
-      setProjectName(newProjectName.trim());
+      setRecitationName(newRecitationName.trim());
       setShowRenameDialog(false);
-      setNewProjectName("");
-      alert("Project renamed successfully!");
+      setNewRecitationName("");
+      alert("Recitation renamed successfully!");
     } catch (error) {
-      console.error("Failed to rename project:", error);
-      alert("Failed to rename project. Please try again.");
+      console.error("Failed to rename recitation:", error);
+      alert("Failed to rename recitation. Please try again.");
     }
   };
 
@@ -800,92 +814,85 @@ export default function AudioUploader() {
     }
   };
 
-  const handleTranscribe = async (forceRefresh = false) => {
+  const handleTranscribe = async () => {
     if (!selectedSurah || !user) return;
 
-    // Determine which transcription to use
-    const cachedTranscription = forceRefresh ? null : whisperTranscription;
-
-    // Check if we need an audio file (only if no cached transcription)
-    if (!cachedTranscription && !audioFile) {
+    // Check if we need an audio file
+    if (!audioFile) {
       alert("Please upload an audio file first.");
       return;
     }
 
-    // 💰 STEP 1: Show cost estimation dialog (only if we need to run Whisper)
-    if (!cachedTranscription) {
-      try {
-        // Calculate rough audio duration estimate
-        const audioSizeMB = audioFile!.size / (1024 * 1024);
-        const estimatedAudioMinutes = audioSizeMB / 0.5; // Rough estimate: 1MB ≈ 2 minutes of MP3
-        const estimatedAyahs =
-          SURAHS.find((s) => s.number === selectedSurah)?.ayahs || 0;
+    // 💰 STEP 1: Show cost estimation dialog
+    try {
+      // Calculate rough audio duration estimate
+      const audioSizeMB = audioFile.size / (1024 * 1024);
+      const estimatedAudioMinutes = audioSizeMB / 0.5; // Rough estimate: 1MB ≈ 2 minutes of MP3
+      const estimatedAyahs =
+        SURAHS.find((s) => s.number === selectedSurah)?.ayahs || 0;
 
-        const estimate = estimateTranscriptionCost({
-          audioDurationMinutes: estimatedAudioMinutes,
-          audioSizeMB,
-          estimatedAyahs,
-        });
+      const estimate = estimateTranscriptionCost({
+        audioDurationMinutes: estimatedAudioMinutes,
+        audioSizeMB,
+        estimatedAyahs,
+      });
 
-        setCostEstimate(estimate);
-        setShowCostDialog(true);
+      setCostEstimate(estimate);
+      setShowCostDialog(true);
 
-        // Wait for user confirmation
-        const confirmed = await new Promise<boolean>((resolve) => {
-          // Create a one-time event listener for user response
-          const handler = (e: CustomEvent) => {
-            resolve(e.detail.confirmed);
-          };
-          window.addEventListener(
-            "cost-dialog-response",
-            handler as EventListener,
-            { once: true }
-          );
-
-          // Set a timeout to auto-reject after 5 minutes
-          setTimeout(() => {
-            resolve(false);
-          }, 300000);
-        });
-
-        setShowCostDialog(false);
-
-        if (!confirmed) {
-          console.log("❌ User cancelled transcription");
-          return;
-        }
-
-        // Check token balance
-        if (tokenBalance < estimate.totalTokens) {
-          alert(
-            `Insufficient tokens!\n\nYou need ${estimate.totalTokens} tokens but only have ${tokenBalance}.\n\nPlease purchase more tokens to continue.`
-          );
-          return;
-        }
-
-        // Reserve tokens by deducting them upfront
-        console.log(
-          `💰 Reserving ${estimate.totalTokens} tokens for transcription...`
+      // Wait for user confirmation
+      const confirmed = await new Promise<boolean>((resolve) => {
+        // Create a one-time event listener for user response
+        const handler = (e: CustomEvent) => {
+          resolve(e.detail.confirmed);
+        };
+        window.addEventListener(
+          "cost-dialog-response",
+          handler as EventListener,
+          { once: true }
         );
-        await reserveTokens(
-          user.id,
-          estimate.totalTokens,
-          `Reserved for ${
-            SURAHS.find((s) => s.number === selectedSurah)?.name
-          }`,
-          { surahNumber: selectedSurah, projectId: currentProjectId }
-        );
-        setTokenBalance((prev) => prev - estimate.totalTokens);
-        console.log(
-          `✅ Tokens reserved. New balance: ${
-            tokenBalance - estimate.totalTokens
-          }`
-        );
-      } catch (error) {
-        console.error("❌ Failed to process cost estimation:", error);
-        alert("Failed to process cost estimation. Please try again.");
+
+        // Set a timeout to auto-reject after 5 minutes
+        setTimeout(() => {
+          resolve(false);
+        }, 300000);
+      });
+
+      setShowCostDialog(false);
+
+      if (!confirmed) {
+        console.log("❌ User cancelled transcription");
         return;
       }
+
+      // Check token balance
+      if (tokenBalance < estimate.totalTokens) {
+        alert(
+          `Insufficient tokens!\n\nYou need ${estimate.totalTokens} tokens but only have ${tokenBalance}.\n\nPlease purchase more tokens to continue.`
+        );
+        return;
+      }
+
+      // Reserve tokens by deducting them upfront
+      console.log(
+        `💰 Reserving ${estimate.totalTokens} tokens for transcription...`
+      );
+      await reserveTokens(
+        user.id,
+        estimate.totalTokens,
+        `Reserved for ${SURAHS.find((s) => s.number === selectedSurah)?.name}`,
+        { surahNumber: selectedSurah, recitationId: currentRecitationId }
+      );
+      setTokenBalance((prev) => prev - estimate.totalTokens);
+      console.log(
+        `✅ Tokens reserved. New balance: ${
+          tokenBalance - estimate.totalTokens
+        }`
+      );
+    } catch (error) {
+      console.error("❌ Failed to process cost estimation:", error);
+      alert("Failed to process cost estimation. Please try again.");
+      return;
     }
 
     setIsTranscribing(true);
@@ -899,16 +906,12 @@ export default function AudioUploader() {
     });
 
     try {
-      let finalTranscription = cachedTranscription;
+      let finalTranscription = whisperTranscription;
       const allMappedSegments: Segment[] = [];
 
       // If we don't have cached transcription, need to transcribe with Whisper
       if (!finalTranscription && audioFile && audioUrl) {
-        console.log(
-          forceRefresh
-            ? `🔄 FORCING FRESH Whisper transcription for ${audioFile.name}`
-            : `🎤 Starting Whisper transcription for ${audioFile.name}`
-        );
+        console.log(`🎤 Starting Whisper transcription for ${audioFile.name}`);
 
         setTranscriptionProgress({
           current: 0,
@@ -976,15 +979,15 @@ export default function AudioUploader() {
         ).__whisperUsageData = lambdaUsage;
 
         // Save Whisper transcription
-        if (currentProjectId && finalTranscription && user) {
-          const recitation = await getRecitation(currentProjectId);
-          const existingProject = recitation
-            ? recitationToSavedProject(recitation)
+        if (currentRecitationId && finalTranscription && user) {
+          const recitationData = await getRecitation(currentRecitationId);
+          const existingRecitation = recitationData
+            ? recitationToSavedRecitation(recitationData)
             : null;
 
-          if (existingProject) {
-            await saveProjectUniversal({
-              ...existingProject,
+          if (existingRecitation) {
+            await saveRecitationUniversal({
+              ...existingRecitation,
               whisperTranscription: finalTranscription,
               lastModified: new Date().toISOString(),
             });
@@ -1047,8 +1050,8 @@ export default function AudioUploader() {
             `✅ AI mapping complete! Got ${mappingData.segments.length} segments`
           );
 
-          // 💰 STEP 2: Calculate actual cost and record usage (only if we ran Whisper)
-          if (!cachedTranscription && currentProjectId) {
+          // 💰 STEP 2: Calculate actual cost and record usage
+          if (currentRecitationId) {
             try {
               const whisperUsage =
                 (
@@ -1082,7 +1085,7 @@ export default function AudioUploader() {
               // Record usage in database
               await recordTranscriptionUsage(
                 user.id,
-                currentProjectId,
+                currentRecitationId,
                 actualCost,
                 actualUsage
               );
@@ -1126,15 +1129,15 @@ export default function AudioUploader() {
 
           // Save after mapping
           setOriginalSegments(allMappedSegments);
-          if (currentProjectId && user) {
-            const recitation = await getRecitation(currentProjectId);
-            const existingProject = recitation
-              ? recitationToSavedProject(recitation)
+          if (currentRecitationId && user) {
+            const recitationData = await getRecitation(currentRecitationId);
+            const existingRecitation = recitationData
+              ? recitationToSavedRecitation(recitationData)
               : null;
 
-            if (existingProject) {
-              await saveProjectUniversal({
-                ...existingProject,
+            if (existingRecitation) {
+              await saveRecitationUniversal({
+                ...existingRecitation,
                 segments: allMappedSegments,
                 whisperTranscription: finalTranscription,
                 lastModified: new Date().toISOString(),
@@ -1158,17 +1161,18 @@ export default function AudioUploader() {
         setOriginalSegments(allMappedSegments);
 
         // IMMEDIATELY save to Supabase (don't wait for user to click Save!)
-        if (currentProjectId && user) {
-          const recitation = await getRecitation(currentProjectId);
-          if (recitation) {
-            const existingProject = recitationToSavedProject(recitation);
-            const updatedProject = {
-              ...existingProject,
+        if (currentRecitationId && user) {
+          const recitationData = await getRecitation(currentRecitationId);
+          if (recitationData) {
+            const existingRecitation =
+              recitationToSavedRecitation(recitationData);
+            const updatedRecitation = {
+              ...existingRecitation,
               segments: allMappedSegments,
               whisperTranscription: finalTranscription || undefined,
               lastModified: new Date().toISOString(),
             };
-            await saveProjectUniversal(updatedProject);
+            await saveRecitationUniversal(updatedRecitation);
             console.log(
               `✅ Auto-saved to Supabase: ${allMappedSegments.length} segments + Whisper cache`
             );
@@ -1212,34 +1216,6 @@ export default function AudioUploader() {
     }
   };
 
-  const handleFreshWhisperTranscription = async () => {
-    if (!selectedSurah) return;
-
-    console.log(
-      "🗑️ Clearing cached Whisper transcription and forcing fresh transcription..."
-    );
-
-    // Clear cached Whisper transcription from state
-    setWhisperTranscription(null);
-
-    // Clear from Supabase immediately
-    if (currentProjectId && user) {
-      const recitation = await getRecitation(currentProjectId);
-      if (recitation) {
-        const existingProject = recitationToSavedProject(recitation);
-        await saveProjectUniversal({
-          ...existingProject,
-          whisperTranscription: undefined,
-          lastModified: new Date().toISOString(),
-        });
-        console.log("✅ Cleared cached Whisper transcription from storage");
-      }
-    }
-
-    // Run fresh transcription with forceRefresh=true to skip cache
-    await handleTranscribe(true);
-  };
-
   // UNUSED - Legacy function (keeping for reference)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleSilenceDetection = async () => {
@@ -1262,16 +1238,17 @@ export default function AudioUploader() {
       setOriginalSegments(detectedSegments);
 
       // IMMEDIATELY save to Supabase (don't wait for user to click Save!)
-      if (currentProjectId && user) {
-        const recitation = await getRecitation(currentProjectId);
-        if (recitation) {
-          const existingProject = recitationToSavedProject(recitation);
-          const updatedProject = {
-            ...existingProject,
+      if (currentRecitationId && user) {
+        const recitationData = await getRecitation(currentRecitationId);
+        if (recitationData) {
+          const existingRecitation =
+            recitationToSavedRecitation(recitationData);
+          const updatedRecitation = {
+            ...existingRecitation,
             segments: detectedSegments,
             lastModified: new Date().toISOString(),
           };
-          await saveProjectUniversal(updatedProject);
+          await saveRecitationUniversal(updatedRecitation);
           console.log(
             `✅ Auto-saved ${detectedSegments.length} silence-detected segments to Supabase`
           );
@@ -1536,13 +1513,13 @@ export default function AudioUploader() {
 
   const hasText = ayahTexts.length > 0;
 
-  // Show loading state while waiting for auth or project data
-  if (projectId && !user) {
+  // Show loading state while waiting for auth or recitation data
+  if (recitationId && !user) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
           <div className="animate-spin h-8 w-8 border-4 border-primary border-t-transparent rounded-full"></div>
-          <p className="text-muted-foreground">Loading project...</p>
+          <p className="text-muted-foreground">Loading recitation...</p>
         </div>
       </div>
     );
@@ -1556,7 +1533,7 @@ export default function AudioUploader() {
             <div className="flex items-start justify-between">
               <div className="flex-1">
                 <CardTitle className="text-2xl">
-                  {projectName || "New Project"}
+                  {recitationName || "New Recitation"}
                 </CardTitle>
                 <CardDescription>
                   {selectedSurah && (
@@ -1572,13 +1549,13 @@ export default function AudioUploader() {
                   )}
                 </CardDescription>
               </div>
-              {currentProjectId && (
+              {currentRecitationId && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleOpenRename}
                   className="cursor-pointer gap-1"
-                  title="Rename project"
+                  title="Rename recitation"
                 >
                   <FiEdit2 size={14} /> Rename
                 </Button>
@@ -1586,7 +1563,7 @@ export default function AudioUploader() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Audio Preview - Right below project name */}
+            {/* Audio Preview - Right below recitation name */}
             {audioFile && audioUrl && (
               <div className="space-y-2">
                 <audio
@@ -1649,7 +1626,7 @@ export default function AudioUploader() {
                 </div>
                 <Button
                   onClick={() =>
-                    loadAudioFromS3(audioUrl, projectName || "audio.mp3")
+                    loadAudioFromS3(audioUrl, recitationName || "audio.mp3")
                   }
                   variant="outline"
                   size="sm"
@@ -1667,16 +1644,14 @@ export default function AudioUploader() {
                   <>
                     <div className="space-y-3">
                       <Button
-                        onClick={() => handleTranscribe(false)}
+                        onClick={() => handleTranscribe()}
                         disabled={isTranscribing || !selectedSurah}
                         variant="outline"
                         className="cursor-pointer transition-all duration-200 hover:bg-accent w-full"
                         size="lg"
                       >
                         {isTranscribing
-                          ? "AI Mapping..."
-                          : whisperTranscription
-                          ? "Re-map with AI (Cheap)"
+                          ? "AI Detection..."
                           : "Whisper + AI Detection"}
                       </Button>
 
@@ -1705,14 +1680,6 @@ export default function AudioUploader() {
                             </div>
                           )}
                         </div>
-                      )}
-
-                      {whisperTranscription && !isTranscribing && (
-                        <p className="text-xs text-green-600 flex items-center gap-1">
-                          <FiCheckCircle size={12} />
-                          Whisper cached in localStorage - only GPT-4o mapping
-                          cost
-                        </p>
                       )}
                     </div>
 
@@ -1788,52 +1755,11 @@ export default function AudioUploader() {
                   </>
                 )}
 
-                {/* Re-run detection options when segments exist */}
-                {segments.length > 0 && (
-                  <>
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium">
-                        Re-run Detection
-                      </Label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Button
-                          onClick={handleFreshWhisperTranscription}
-                          disabled={isTranscribing || !selectedSurah}
-                          variant="outline"
-                          size="sm"
-                          className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                        >
-                          {isTranscribing
-                            ? "Transcribing..."
-                            : "Re-transcribe with Whisper"}
-                        </Button>
-                        <Button
-                          onClick={() => handleTranscribe(false)}
-                          disabled={isTranscribing || !selectedSurah}
-                          variant="outline"
-                          size="sm"
-                          className="cursor-pointer transition-all duration-200 hover:bg-accent"
-                        >
-                          {isTranscribing
-                            ? "AI Mapping..."
-                            : whisperTranscription
-                            ? "Re-map with AI (Cheap)"
-                            : "Re-detect with Whisper + AI"}
-                        </Button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        ⚠️ This will replace current segments with new detection
-                        results
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                {/* Show info if loaded project */}
-                {currentProjectId && segments.length > 0 && (
+                {/* Show info if loaded recitation */}
+                {currentRecitationId && segments.length > 0 && (
                   <div className="p-3 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
                     <p className="text-sm text-green-700 dark:text-green-300 flex items-center gap-2">
-                      <FiCheckCircle /> Project loaded with {segments.length}{" "}
+                      <FiCheckCircle /> Recitation loaded with {segments.length}{" "}
                       segments
                     </p>
                     {audioFile && (
@@ -1913,7 +1839,7 @@ export default function AudioUploader() {
                   </div>
                   <Button
                     onClick={() =>
-                      loadAudioFromS3(audioUrl, projectName || "audio.mp3")
+                      loadAudioFromS3(audioUrl, recitationName || "audio.mp3")
                     }
                     disabled={isFetchingAudio}
                     size="sm"
@@ -2230,7 +2156,9 @@ export default function AudioUploader() {
                   size="lg"
                 >
                   <FiSave />{" "}
-                  {currentProjectId ? "Update Project" : "Save Project"}
+                  {currentRecitationId
+                    ? "Update Recitation"
+                    : "Save Recitation"}
                 </Button>
                 <Button
                   onClick={handleDownload}
@@ -2261,12 +2189,12 @@ export default function AudioUploader() {
         </div>
       )}
 
-      {/* Save Project Dialog */}
+      {/* Save Recitation Dialog */}
       <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {currentProjectId ? "Update Project" : "Save Project"}
+              {currentRecitationId ? "Update Recitation" : "Save Recitation"}
             </DialogTitle>
             <DialogDescription>
               Save your segmentation work to continue editing later
@@ -2274,11 +2202,11 @@ export default function AudioUploader() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="project-name">Project Name</Label>
+              <Label htmlFor="recitation-name">Recitation Name</Label>
               <Input
-                id="project-name"
-                value={projectName}
-                onChange={(e) => setProjectName(e.target.value)}
+                id="recitation-name"
+                value={recitationName}
+                onChange={(e) => setRecitationName(e.target.value)}
                 placeholder="e.g., Al-Fatiha - Take 1"
                 className="cursor-text"
               />
@@ -2318,7 +2246,7 @@ export default function AudioUploader() {
             </Button>
             <Button
               onClick={handleSaveConfirm}
-              disabled={!projectName.trim() || isSaving}
+              disabled={!recitationName.trim() || isSaving}
               className="cursor-pointer"
             >
               {isSaving ? (
@@ -2333,30 +2261,30 @@ export default function AudioUploader() {
         </DialogContent>
       </Dialog>
 
-      {/* Rename Project Dialog */}
+      {/* Rename Recitation Dialog */}
       <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <FiEdit2 /> Rename Project
+              <FiEdit2 /> Rename Recitation
             </DialogTitle>
             <DialogDescription>
-              Enter a new name for your project.
+              Enter a new name for your recitation.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
-              <Label htmlFor="newProjectName">Project Name</Label>
+              <Label htmlFor="newRecitationName">Recitation Name</Label>
               <Input
-                id="newProjectName"
-                value={newProjectName}
-                onChange={(e) => setNewProjectName(e.target.value)}
+                id="newRecitationName"
+                value={newRecitationName}
+                onChange={(e) => setNewRecitationName(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     handleRename();
                   }
                 }}
-                placeholder="Enter project name"
+                placeholder="Enter recitation name"
                 autoFocus
               />
             </div>
@@ -2371,7 +2299,7 @@ export default function AudioUploader() {
             </Button>
             <Button
               onClick={handleRename}
-              disabled={!newProjectName.trim()}
+              disabled={!newRecitationName.trim()}
               className="cursor-pointer gap-2"
             >
               <FiEdit2 /> Rename

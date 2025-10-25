@@ -111,7 +111,7 @@ export interface Recitation {
 // LEGACY TYPES (for migration)
 // ============================================
 
-export interface SavedProject {
+export interface SavedRecitation {
   id: string;
   name: string;
   reciter?: string;
@@ -140,9 +140,9 @@ export interface SavedProject {
 // ============================================
 
 /**
- * Convert a Recitation (from Supabase) to SavedProject (legacy format)
+ * Convert a Recitation (from Supabase) to SavedRecitation (legacy format)
  */
-export function recitationToSavedProject(recitation: Recitation): SavedProject {
+export function recitationToSavedRecitation(recitation: Recitation): SavedRecitation {
   return {
     id: recitation.id,
     name: `${recitation.reciter_name} - ${recitation.surah_name}`,
@@ -166,31 +166,31 @@ export function recitationToSavedProject(recitation: Recitation): SavedProject {
 }
 
 /**
- * Convert SavedProject (legacy format) to Recitation insert data
+ * Convert SavedRecitation (legacy format) to Recitation insert data
  */
-export function savedProjectToRecitation(
-  project: Partial<SavedProject>,
+export function savedRecitationToRecitation(
+  savedRecitation: Partial<SavedRecitation>,
   userId: string
 ): Omit<Recitation, "id" | "created_at" | "updated_at"> {
   return {
     user_id: userId,
     reciter_id: null, // Will be linked later if reciter exists
-    reciter_name: project.reciter || project.name?.split(" - ")[0] || "Unknown",
-    surah_number: project.surahNumber || 1,
-    surah_name: project.surahName || "",
-    audio_url: project.audioUrl || "",
-    audio_file_name: project.fileName || "",
+    reciter_name: savedRecitation.reciter || savedRecitation.name?.split(" - ")[0] || "Unknown",
+    surah_number: savedRecitation.surahNumber || 1,
+    surah_name: savedRecitation.surahName || "",
+    audio_url: savedRecitation.audioUrl || "",
+    audio_file_name: savedRecitation.fileName || "",
     status:
-      project.segments && project.segments.length > 0 ? "completed" : "pending",
+      savedRecitation.segments && savedRecitation.segments.length > 0 ? "completed" : "pending",
     transcription_data: {
-      segments: project.segments || [],
-      ayah_texts: project.ayahTexts || [],
+      segments: savedRecitation.segments || [],
+      ayah_texts: savedRecitation.ayahTexts || [],
     },
     settings_data: {
-      silence_threshold: project.silenceThreshold || 0.01,
-      min_silence_duration: project.minSilenceDuration || 0.5,
-      end_padding: project.endPadding || 0.3,
-      start_padding: project.startPadding || 0.1,
+      silence_threshold: savedRecitation.silenceThreshold || 0.01,
+      min_silence_duration: savedRecitation.minSilenceDuration || 0.5,
+      end_padding: savedRecitation.endPadding || 0.3,
+      start_padding: savedRecitation.startPadding || 0.1,
     },
     metadata: {},
   };
