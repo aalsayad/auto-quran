@@ -25,7 +25,6 @@ import {
   FiSkipBack,
   FiSkipForward,
   FiRepeat,
-  FiRotateCw,
   FiBook,
   FiVolume2,
   FiVolume,
@@ -72,6 +71,31 @@ interface Ayah {
   translation?: string;
 }
 
+type RepeatMode =
+  | "off"
+  | "surah"
+  | "ayah"
+  | "page"
+  | "ayah-range"
+  | "page-range"
+  | "juz";
+
+interface RepeatConfig {
+  mode: RepeatMode;
+  ayahStart?: number;
+  ayahEnd?: number;
+  pageStart?: number;
+  pageEnd?: number;
+  juzNumber?: number;
+}
+
+interface AudioSegment {
+  start: number;
+  end: number;
+  ayahNumber?: number;
+  ayahNumbers?: number[];
+}
+
 export default function QuranReaderPage() {
   const params = useParams();
   const recitationId = params.recitationId as string;
@@ -110,9 +134,13 @@ export default function QuranReaderPage() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isFetchingAudio, setIsFetchingAudio] = useState(false);
   const [isLoadingRecitation, setIsLoadingRecitation] = useState(true);
-  const [isLooping, setIsLooping] = useState(false);
-  const [isLoopingAyah, setIsLoopingAyah] = useState(false);
   const [showVolumeSlider, setShowVolumeSlider] = useState(false);
+
+  // Repeat configuration
+  const [repeatConfig, setRepeatConfig] = useState<RepeatConfig>({
+    mode: "off",
+  });
+  const [showRepeatMenu, setShowRepeatMenu] = useState(false);
   const [savedAyahNumbers, setSavedAyahNumbers] = useState<number[]>([]); // Track where user left off
   const [showSavedIndicator, setShowSavedIndicator] = useState(true); // Control saved position indicator
   const [bookmarkedAyahs, setBookmarkedAyahs] = useState<number[]>([]); // Track bookmarked ayahs
@@ -507,10 +535,11 @@ export default function QuranReaderPage() {
 
       // Find current ayah based on recitation segments
       if (recitation?.segments) {
-        // For ayah looping, we need to check if we're past a segment end
-        // BEFORE we try to find the current segment (which would fail if time >= seg.end)
+        // Handle repeat modes - check if we need to loop
         const currentAyahs = currentAyahNumbersRef.current;
-        if (isLoopingAyah && currentAyahs.length > 0) {
+
+        // AYAH REPEAT: Loop back to the start of current ayah
+        if (repeatConfig.mode === "ayah" && currentAyahs.length > 0) {
           const loopSegment = recitation.segments.find(
             (seg: {
               ayahNumbers?: number[];
@@ -526,7 +555,6 @@ export default function QuranReaderPage() {
           );
 
           if (loopSegment && time >= loopSegment.end) {
-            // Loop back to the start of this ayah
             console.log(
               "🔄 Looping ayah back from",
               time.toFixed(2),
@@ -538,6 +566,121 @@ export default function QuranReaderPage() {
               safePlay();
             }
             return; // Exit early after looping
+          }
+        }
+
+        // AYAH RANGE REPEAT: Loop within ayah range
+        if (
+          repeatConfig.mode === "ayah-range" &&
+          repeatConfig.ayahStart &&
+          repeatConfig.ayahEnd
+        ) {
+          const lastSegmentInRange = recitation.segments
+            .filter((seg: AudioSegment) => {
+              const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+              return ayahNums.some((num: number) => num <= repeatConfig.ayahEnd!);
+            })
+            .pop();
+
+          if (lastSegmentInRange && time >= lastSegmentInRange.end) {
+            // Loop back to start of range
+            const firstSegmentInRange = recitation.segments.find((seg: AudioSegment) => {
+              const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+              return ayahNums.some((num: number) => num >= repeatConfig.ayahStart!);
+            });
+
+            if (firstSegmentInRange) {
+              console.log("🔄 Looping ayah range back to start");
+              audioRef.current.currentTime = firstSegmentInRange.start;
+              if (audioRef.current.paused) {
+                safePlay();
+              }
+              return;
+            }
+          }
+        }
+
+        // PAGE REPEAT: Loop to start of current page
+        if (repeatConfig.mode === "page" && mushafVerses.length > 0) {
+          const lastVerseOnPage = mushafVerses
+            .filter((v) => v.page_number === currentPage)
+            .pop();
+
+          if (lastVerseOnPage) {
+            const lastAyahNum = parseInt(lastVerseOnPage.verse_key.split(":")[1]);
+            const lastSegmentOnPage = recitation.segments
+              .filter((seg: AudioSegment) => {
+                const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                return ayahNums.includes(lastAyahNum);
+              })
+              .pop();
+
+            if (lastSegmentOnPage && time >= lastSegmentOnPage.end) {
+              // Loop back to first verse on page
+              const firstVerseOnPage = mushafVerses.find((v) => v.page_number === currentPage);
+              if (firstVerseOnPage) {
+                const firstAyahNum = parseInt(firstVerseOnPage.verse_key.split(":")[1]);
+                const firstSegmentOnPage = recitation.segments.find((seg: AudioSegment) => {
+                  const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                  return ayahNums.includes(firstAyahNum);
+                });
+
+                if (firstSegmentOnPage) {
+                  console.log("🔄 Looping page back to start");
+                  audioRef.current.currentTime = firstSegmentOnPage.start;
+                  if (audioRef.current.paused) {
+                    safePlay();
+                  }
+                  return;
+                }
+              }
+            }
+          }
+        }
+
+        // PAGE RANGE REPEAT: Loop within page range
+        if (
+          repeatConfig.mode === "page-range" &&
+          repeatConfig.pageStart &&
+          repeatConfig.pageEnd &&
+          mushafVerses.length > 0
+        ) {
+          const lastVerseInRange = mushafVerses
+            .filter((v) => v.page_number && v.page_number <= repeatConfig.pageEnd!)
+            .pop();
+
+          if (lastVerseInRange) {
+            const lastAyahNum = parseInt(lastVerseInRange.verse_key.split(":")[1]);
+            const lastSegmentInRange = recitation.segments
+              .filter((seg: AudioSegment) => {
+                const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                return ayahNums.includes(lastAyahNum);
+              })
+              .pop();
+
+            if (lastSegmentInRange && time >= lastSegmentInRange.end) {
+              // Loop back to first verse in range
+              const firstVerseInRange = mushafVerses.find(
+                (v) => v.page_number && v.page_number >= repeatConfig.pageStart!
+              );
+
+              if (firstVerseInRange) {
+                const firstAyahNum = parseInt(firstVerseInRange.verse_key.split(":")[1]);
+                const firstSegmentInRange = recitation.segments.find((seg: AudioSegment) => {
+                  const ayahNums = seg.ayahNumbers || (seg.ayahNumber ? [seg.ayahNumber] : []);
+                  return ayahNums.includes(firstAyahNum);
+                });
+
+                if (firstSegmentInRange) {
+                  console.log("🔄 Looping page range back to start");
+                  audioRef.current.currentTime = firstSegmentInRange.start;
+                  if (audioRef.current.paused) {
+                    safePlay();
+                  }
+                  return;
+                }
+              }
+            }
           }
         }
 
@@ -592,7 +735,7 @@ export default function QuranReaderPage() {
     }
     // scrollToAyah and safePlay are stable callbacks (defined with useCallback)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recitation?.segments, isLoopingAyah, ayahs]);
+  }, [recitation?.segments, repeatConfig, ayahs, mushafVerses, currentPage]);
 
   const handleLoadedMetadata = useCallback(() => {
     if (audioRef.current) {
@@ -669,44 +812,43 @@ export default function QuranReaderPage() {
   }, [isPlaying, safePlay, safePause]);
 
   const handleEnded = useCallback(() => {
-    const currentAyahs = currentAyahNumbersRef.current;
-    if (isLoopingAyah && recitation?.segments && currentAyahs.length > 0) {
-      const currentSegment = recitation.segments.find(
-        (seg: {
-          ayahNumbers?: number[];
-          ayahNumber?: number;
-          start: number;
-          end: number;
-        }) =>
-          seg.ayahNumbers?.some((num: number) => currentAyahs.includes(num)) ||
-          (seg.ayahNumber !== undefined &&
-            currentAyahs.includes(seg.ayahNumber))
-      );
-      if (currentSegment && audioRef.current) {
-        audioRef.current.currentTime = currentSegment.start;
-        safePlay();
-      }
+    // Handle repeat modes when audio ends
+    if (repeatConfig.mode === "surah" && audioRef.current) {
+      // Loop back to start of surah
+      console.log("🔄 Looping surah back to start");
+      audioRef.current.currentTime = 0;
+      safePlay();
+    } else if (repeatConfig.mode === "juz" && recitation?.segments && audioRef.current) {
+      // For juz repeat, loop back to the first segment
+      // (This assumes the entire surah is within the juz - for cross-surah juz, more logic needed)
+      console.log("🔄 Looping juz back to start");
+      audioRef.current.currentTime = 0;
+      safePlay();
     } else {
+      // No repeat or already handled in handleTimeUpdate
       setIsPlaying(false);
     }
-  }, [isLoopingAyah, recitation?.segments, safePlay]);
+  }, [repeatConfig.mode, recitation?.segments, safePlay]);
 
-  const handleToggleLoop = () => {
-    const newLooping = !isLooping;
-    setIsLooping(newLooping);
-    // If enabling full surah loop, disable ayah loop
-    if (newLooping && isLoopingAyah) {
-      setIsLoopingAyah(false);
-    }
-  };
-
-  const handleToggleLoopAyah = () => {
-    const newLoopingAyah = !isLoopingAyah;
-    setIsLoopingAyah(newLoopingAyah);
-    console.log("🔄 Ayah Loop:", newLoopingAyah ? "ENABLED" : "DISABLED");
-    // If enabling ayah loop, disable full surah loop
-    if (newLoopingAyah && isLooping) {
-      setIsLooping(false);
+  // Get repeat mode label for display
+  const getRepeatLabel = () => {
+    switch (repeatConfig.mode) {
+      case "off":
+        return "Off";
+      case "surah":
+        return "Surah";
+      case "ayah":
+        return "Ayah";
+      case "page":
+        return "Page";
+      case "ayah-range":
+        return `Ayah ${repeatConfig.ayahStart}-${repeatConfig.ayahEnd}`;
+      case "page-range":
+        return `Pg ${repeatConfig.pageStart}-${repeatConfig.pageEnd}`;
+      case "juz":
+        return `Juz ${repeatConfig.juzNumber}`;
+      default:
+        return "Off";
     }
   };
 
@@ -831,8 +973,8 @@ export default function QuranReaderPage() {
         console.log(
           "👆 Clicked ayah:",
           ayahNums,
-          "- Loop active:",
-          isLoopingAyah
+          "- Repeat mode:",
+          repeatConfig.mode
         );
       }
 
@@ -1157,6 +1299,16 @@ export default function QuranReaderPage() {
   const speedOptions = [
     0.5, 0.6, 0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2,
   ];
+
+  // Calculate page range for current surah
+  const surahPageRange = {
+    min: mushafVerses.length > 0
+      ? Math.min(...mushafVerses.map(v => v.page_number || 604).filter(p => p > 0))
+      : 1,
+    max: mushafVerses.length > 0
+      ? Math.max(...mushafVerses.map(v => v.page_number || 1).filter(p => p > 0))
+      : 604,
+  };
 
   return (
     <div className="min-h-screen bg-background pb-32">
@@ -2040,25 +2192,230 @@ export default function QuranReaderPage() {
                     </div>
                   )}
 
-                  <Button
-                    onClick={handleToggleLoop}
-                    variant={isLooping ? "default" : "outline"}
-                    size="icon"
-                    className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
-                    title="Repeat surah"
+                  {/* Repeat Options Dropdown */}
+                  <DropdownMenu
+                    open={showRepeatMenu}
+                    onOpenChange={setShowRepeatMenu}
+                    modal={false}
                   >
-                    <FiRepeat className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  </Button>
-                  <Button
-                    onClick={handleToggleLoopAyah}
-                    variant={isLoopingAyah ? "default" : "outline"}
-                    size="icon"
-                    className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10"
-                    title="Repeat current ayah"
-                    disabled={currentAyahNumbers.length === 0}
-                  >
-                    <FiRotateCw className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-                  </Button>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant={repeatConfig.mode !== "off" ? "default" : "outline"}
+                        size="icon"
+                        className="cursor-pointer h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10 relative"
+                        title={`Repeat: ${getRepeatLabel()}`}
+                      >
+                        <FiRepeat className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+                        {repeatConfig.mode !== "off" && (
+                          <span className="absolute -top-1 -right-1 h-3 w-3 bg-primary rounded-full"></span>
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      side="top"
+                      align="start"
+                      className="w-80"
+                      sideOffset={12}
+                    >
+                      <DropdownMenuLabel>Repeat Mode</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+
+                      {/* Off */}
+                      <DropdownMenuItem
+                        onClick={() => setRepeatConfig({ mode: "off" })}
+                        className="cursor-pointer"
+                      >
+                        {repeatConfig.mode === "off" && "✓ "}
+                        Off
+                      </DropdownMenuItem>
+
+                      {/* Repeat Surah */}
+                      <DropdownMenuItem
+                        onClick={() => setRepeatConfig({ mode: "surah" })}
+                        className="cursor-pointer"
+                      >
+                        {repeatConfig.mode === "surah" && "✓ "}
+                        Repeat Surah
+                      </DropdownMenuItem>
+
+                      {/* Repeat Current Ayah */}
+                      <DropdownMenuItem
+                        onClick={() => setRepeatConfig({ mode: "ayah" })}
+                        className="cursor-pointer"
+                        disabled={currentAyahNumbers.length === 0}
+                      >
+                        {repeatConfig.mode === "ayah" && "✓ "}
+                        Repeat Current Ayah
+                        {currentAyahNumbers.length === 0 && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            (Play audio first)
+                          </span>
+                        )}
+                      </DropdownMenuItem>
+
+                      {/* Repeat Current Page */}
+                      <DropdownMenuItem
+                        onClick={() => setRepeatConfig({ mode: "page" })}
+                        className="cursor-pointer"
+                      >
+                        {repeatConfig.mode === "page" && "✓ "}
+                        Repeat Current Page ({currentPage})
+                      </DropdownMenuItem>
+
+                      <DropdownMenuSeparator />
+
+                      {/* Repeat Ayah Range */}
+                      <DropdownMenuLabel className="text-xs text-muted-foreground">
+                        Custom Ranges
+                      </DropdownMenuLabel>
+                      <div className="px-2 py-3 space-y-3">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium">Ayah Range</label>
+                          <div className="flex gap-2 items-center">
+                            <Input
+                              type="number"
+                              placeholder="From"
+                              min={1}
+                              max={ayahs.length}
+                              value={repeatConfig.ayahStart || ""}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!val || (val >= 1 && val <= ayahs.length)) {
+                                  setRepeatConfig({
+                                    ...repeatConfig,
+                                    ayahStart: val || undefined,
+                                  });
+                                }
+                              }}
+                              className="h-8 text-xs"
+                            />
+                            <span className="text-xs text-muted-foreground">to</span>
+                            <Input
+                              type="number"
+                              placeholder="To"
+                              min={1}
+                              max={ayahs.length}
+                              value={repeatConfig.ayahEnd || ""}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!val || (val >= 1 && val <= ayahs.length)) {
+                                  setRepeatConfig({
+                                    ...repeatConfig,
+                                    ayahEnd: val || undefined,
+                                  });
+                                }
+                              }}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            This surah has {ayahs.length} ayahs (1-{ayahs.length})
+                          </p>
+                          <Button
+                            onClick={() => {
+                              if (
+                                repeatConfig.ayahStart &&
+                                repeatConfig.ayahEnd &&
+                                repeatConfig.ayahStart <= repeatConfig.ayahEnd &&
+                                repeatConfig.ayahStart >= 1 &&
+                                repeatConfig.ayahEnd <= ayahs.length
+                              ) {
+                                setRepeatConfig({
+                                  ...repeatConfig,
+                                  mode: "ayah-range",
+                                });
+                                setShowRepeatMenu(false);
+                              }
+                            }}
+                            disabled={
+                              !repeatConfig.ayahStart ||
+                              !repeatConfig.ayahEnd ||
+                              repeatConfig.ayahStart > repeatConfig.ayahEnd ||
+                              repeatConfig.ayahStart < 1 ||
+                              repeatConfig.ayahEnd > ayahs.length
+                            }
+                            size="sm"
+                            className="w-full h-8 text-xs"
+                          >
+                            Apply Ayah Range
+                          </Button>
+                        </div>
+
+                        {/* Repeat Page Range */}
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium">Page Range</label>
+                          <div className="flex gap-2 items-center">
+                            <Input
+                              type="number"
+                              placeholder="From"
+                              min={surahPageRange.min}
+                              max={surahPageRange.max}
+                              value={repeatConfig.pageStart || ""}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!val || (val >= surahPageRange.min && val <= surahPageRange.max)) {
+                                  setRepeatConfig({
+                                    ...repeatConfig,
+                                    pageStart: val || undefined,
+                                  });
+                                }
+                              }}
+                              className="h-8 text-xs"
+                            />
+                            <span className="text-xs text-muted-foreground">to</span>
+                            <Input
+                              type="number"
+                              placeholder="To"
+                              min={surahPageRange.min}
+                              max={surahPageRange.max}
+                              value={repeatConfig.pageEnd || ""}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value);
+                                if (!val || (val >= surahPageRange.min && val <= surahPageRange.max)) {
+                                  setRepeatConfig({
+                                    ...repeatConfig,
+                                    pageEnd: val || undefined,
+                                  });
+                                }
+                              }}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            This surah spans pages {surahPageRange.min}-{surahPageRange.max}
+                          </p>
+                          <Button
+                            onClick={() => {
+                              if (
+                                repeatConfig.pageStart &&
+                                repeatConfig.pageEnd &&
+                                repeatConfig.pageStart <= repeatConfig.pageEnd &&
+                                repeatConfig.pageStart >= surahPageRange.min &&
+                                repeatConfig.pageEnd <= surahPageRange.max
+                              ) {
+                                setRepeatConfig({
+                                  ...repeatConfig,
+                                  mode: "page-range",
+                                });
+                                setShowRepeatMenu(false);
+                              }
+                            }}
+                            disabled={
+                              !repeatConfig.pageStart ||
+                              !repeatConfig.pageEnd ||
+                              repeatConfig.pageStart > repeatConfig.pageEnd ||
+                              repeatConfig.pageStart < surahPageRange.min ||
+                              repeatConfig.pageEnd > surahPageRange.max
+                            }
+                            size="sm"
+                            className="w-full h-8 text-xs"
+                          >
+                            Apply Page Range
+                          </Button>
+                        </div>
+                      </div>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
 
                 {/* Center: Playback Controls */}
@@ -2119,10 +2476,10 @@ export default function QuranReaderPage() {
         </div>
       </div>
 
-      {/* Hidden audio element */}
+      {/* Hidden audio element - We handle looping manually in handleTimeUpdate/handleEnded */}
       <audio
         ref={audioRef}
-        loop={isLooping}
+        loop={false}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onCanPlay={handleCanPlay}
