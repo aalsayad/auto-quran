@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { SavedRecitation } from "@/lib/types";
+import TopNavbar from "@/components/top-navbar";
 import { SURAHS } from "@/lib/surah-data";
 import { useAuth } from "@/contexts/auth-context";
 import { getRecitation } from "@/lib/supabase-storage";
@@ -21,7 +22,6 @@ import {
   FiPlay,
   FiPause,
   FiInfo,
-  FiArrowLeft,
   FiSkipBack,
   FiSkipForward,
   FiRepeat,
@@ -792,9 +792,14 @@ export default function QuranReaderPage() {
     if (!recitation || !audioRef.current) return;
 
     // Find the segment that contains this ayah
-    const segment = recitation.segments.find((seg) =>
-      seg.ayahs.includes(ayahNumber)
-    );
+    const segment = recitation.segments.find((seg) => {
+      if (seg.ayahNumbers) {
+        return seg.ayahNumbers.includes(ayahNumber);
+      } else if (seg.ayahNumber) {
+        return seg.ayahNumber === ayahNumber;
+      }
+      return false;
+    });
 
     if (!segment) {
       console.warn("No segment found for ayah:", ayahNumber);
@@ -803,7 +808,9 @@ export default function QuranReaderPage() {
 
     // Set audio to the start of this segment
     audioRef.current.currentTime = segment.start;
-    setCurrentAyahNumbers(segment.ayahs);
+    const ayahNums =
+      segment.ayahNumbers || (segment.ayahNumber ? [segment.ayahNumber] : []);
+    setCurrentAyahNumbers(ayahNums);
 
     // Scroll to the ayah
     const ayahIndex = ayahs.findIndex((a) => a.numberInSurah === ayahNumber);
@@ -901,6 +908,10 @@ export default function QuranReaderPage() {
     <div className="min-h-screen bg-background pb-32">
       {/* Header */}
       <div className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
+        {/* Top Navbar */}
+        <TopNavbar />
+
+        {/* Recitation Header */}
         <div className="container mx-auto px-4 py-3 sm:py-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
             <div className="min-w-0 flex-1">
@@ -918,19 +929,6 @@ export default function QuranReaderPage() {
             <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
               {/* View Mode Toggle */}
               <div className="flex gap-1 sm:gap-2">
-                <Link href="/library">
-                  <Button
-                    variant="outline"
-                    className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"
-                  >
-                    <FiArrowLeft className="h-3 w-3 sm:h-4 sm:w-4" />
-                    <span>Library</span>
-                  </Button>
-                </Link>
-
-                {/* Divider */}
-                <div className="w-px bg-border mx-1 sm:mx-2 hidden sm:block" />
-
                 <Button
                   variant={viewMode === "list" ? "default" : "outline"}
                   className="cursor-pointer gap-1 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1 sm:py-2"

@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, useLayoutEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { SURAHS } from "@/lib/surah-data";
 import { useAuth } from "@/contexts/auth-context";
+import TopNavbar from "@/components/top-navbar";
 import {
   getAllMushafPages,
+  getMushafPage,
   getPageForSurah,
   getAllSurahs,
   type Verse,
@@ -85,21 +86,37 @@ function StandaloneMushafPageContent() {
   const touchStartX = useRef(0);
   const touchEndX = useRef(0);
 
-  // Load all data on mount (Surahs + All Pages)
+  // Refs for auto-scaling lines on mobile
+  const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Load data progressively for instant navigation
   useEffect(() => {
-    const loadAllData = async () => {
-      setIsLoading(true);
-      console.log("📖 Loading all Mushaf data...");
-      const [surahs, pages] = await Promise.all([
-        getAllSurahs(),
-        getAllMushafPages(),
-      ]);
+    const loadData = async () => {
+      console.log("📖 Loading Mushaf...");
+
+      // Load surahs first (tiny file, needed for navigation)
+      const surahs = await getAllSurahs();
       setAllSurahs(surahs);
-      setAllPages(pages);
-      setIsLoading(false);
-      console.log("✅ All Mushaf data loaded! 604 pages ready.");
+
+      // Get starting page
+      const savedPage = localStorage.getItem("mushaf-last-page");
+      const startPage = savedPage ? parseInt(savedPage) : 1;
+
+      // Load current page FIRST for instant display
+      const currentPageData = await getMushafPage(startPage);
+      setAllPages({ [startPage]: currentPageData });
+      setIsLoading(false); // Show UI NOW!
+      console.log(`✅ Ready! (Page ${startPage})`);
+
+      // Load ALL pages in background (stays in memory, not localStorage)
+      setTimeout(async () => {
+        console.log("📥 Loading all pages in background...");
+        const allPagesData = await getAllMushafPages();
+        setAllPages(allPagesData);
+        console.log("✅ All 604 pages loaded! Navigation is instant now.");
+      }, 100);
     };
-    loadAllData();
+    loadData();
   }, []);
 
   // Initialize page based on query param
@@ -126,7 +143,7 @@ function StandaloneMushafPageContent() {
     initPage();
   }, [initialSurah]);
 
-  // Update verses when page changes (instant, no loading!)
+  // Update verses when page changes (instant once loaded)
   useEffect(() => {
     if (Object.keys(allPages).length > 0) {
       const pageVerses = allPages[currentPage.toString()] || [];
@@ -169,6 +186,36 @@ function StandaloneMushafPageContent() {
       }
     }
   }, [verses]);
+
+  // Auto-scale mushaf lines to fit mobile screen width
+  useLayoutEffect(() => {
+    if (viewMode !== "mushaf") return;
+
+    const isMobile = window.innerWidth < 768;
+    if (!isMobile) return;
+
+    lineRefs.current.forEach((lineEl) => {
+      if (!lineEl) return;
+
+      const container = lineEl.parentElement;
+      if (!container) return;
+
+      // Reset any previous scaling
+      lineEl.style.transform = "";
+
+      // Get dimensions
+      const containerWidth = container.clientWidth;
+      const contentWidth = lineEl.scrollWidth;
+
+      // If content is wider than container, scale it down
+      // Leave 48px padding (24px on each side) from screen edges
+      if (contentWidth > containerWidth) {
+        const scale = (containerWidth - 48) / contentWidth;
+        lineEl.style.transform = `scale(${scale})`;
+        lineEl.style.transformOrigin = "center";
+      }
+    });
+  }, [viewMode, verses, currentPage]);
 
   // Touch handlers for swipe
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -374,14 +421,14 @@ function StandaloneMushafPageContent() {
 
   const ayahRange = getAyahRange();
 
-  // Show loading state while data is being fetched
+  // Show loading state while initial data is being fetched
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center space-y-4">
           <div className="text-xl font-semibold">Loading Mushaf...</div>
           <div className="text-sm text-muted-foreground">
-            Loading all 604 pages for instant navigation
+            Preparing your Quran reader
           </div>
         </div>
       </div>
@@ -393,37 +440,7 @@ function StandaloneMushafPageContent() {
       {/* Header */}
       <div className="sticky top-0 z-50 border-b bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/60">
         {/* Top Navbar */}
-        <nav className="border-b">
-          <div className="container mx-auto px-4 py-2">
-            <div className="flex items-center justify-between">
-              <Link href="/">
-                <h1 className="text-lg sm:text-xl font-semibold transition-opacity duration-200 hover:opacity-70 cursor-pointer">
-                  Auto Quran
-                </h1>
-              </Link>
-              <div className="flex items-center gap-1 sm:gap-2">
-                <Link href="/library">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="cursor-pointer text-sm sm:text-base px-2 sm:px-3 py-1 sm:py-2 h-auto"
-                  >
-                    Library
-                  </Button>
-                </Link>
-                <Link href="/mushaf">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="cursor-pointer text-sm sm:text-base px-2 sm:px-3 py-1 sm:py-2 h-auto bg-primary text-primary-foreground"
-                  >
-                    Mushaf
-                  </Button>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </nav>
+        <TopNavbar />
 
         {/* Bottom Navigation Bar (Mushaf Controls) */}
         <div className="container mx-auto px-4 py-3">
@@ -1000,10 +1017,14 @@ function StandaloneMushafPageContent() {
                             display: "flex",
                             justifyContent: "center",
                             alignItems: "center",
+                            overflow: "hidden",
                           }}
                         >
                           <div
-                            className="text-lg sm:text-2xl md:text-3xl mushaf-line"
+                            ref={(el) => {
+                              lineRefs.current[lineIdx] = el;
+                            }}
+                            className="text-2xl md:text-3xl mushaf-line"
                             style={{
                               whiteSpace: "nowrap",
                               overflow: "visible",

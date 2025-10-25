@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import type { SavedRecitation } from "@/lib/types";
 import CreateRecitationDialog from "@/components/create-recitation-dialog";
-import Navbar from "@/components/navbar";
+import TopNavbar from "@/components/top-navbar";
 import { useAuth } from "@/contexts/auth-context";
 import {
   getRecitations,
@@ -50,7 +50,9 @@ export default function LibraryPage() {
   const [recitations, setRecitations] = useState<SavedRecitation[]>([]);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
-  const [renameRecitationId, setRenameRecitationId] = useState<string | null>(null);
+  const [renameRecitationId, setRenameRecitationId] = useState<string | null>(
+    null
+  );
   const [newRecitationName, setNewRecitationName] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -69,7 +71,9 @@ export default function LibraryPage() {
 
       // Load from Supabase
       const recitationsData = await getRecitations(user.id);
-      const recitationsFormatted = recitationsData.map(recitationToSavedRecitation);
+      const recitationsFormatted = recitationsData.map(
+        recitationToSavedRecitation
+      );
       // Sort by last modified date (newest first)
       recitationsFormatted.sort(
         (a, b) =>
@@ -100,7 +104,10 @@ export default function LibraryPage() {
     try {
       // If recitation has an audio URL, delete from S3 first
       if (recitation.audioUrl) {
-        console.log("🗑️  [Library] Deleting audio from S3:", recitation.audioUrl);
+        console.log(
+          "🗑️  [Library] Deleting audio from S3:",
+          recitation.audioUrl
+        );
 
         const response = await fetch("/api/delete-audio", {
           method: "POST",
@@ -199,8 +206,8 @@ export default function LibraryPage() {
 
   return (
     <>
-      <Navbar />
-      <div className="container mx-auto px-4 py-4 sm:py-6 pt-20 sm:pt-24">
+      <TopNavbar />
+      <div className="container mx-auto px-4 py-4 sm:py-6 pt-4 sm:pt-6">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-4 sm:mb-6">
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2 sm:gap-3">
@@ -274,7 +281,8 @@ export default function LibraryPage() {
                           <div className="flex items-start gap-1">
                             <FiBook size={12} className="shrink-0 mt-0.5" />
                             <span className="wrap-break-word min-w-0">
-                              Surah {recitation.surahNumber} - {recitation.surahName}
+                              Surah {recitation.surahNumber} -{" "}
+                              {recitation.surahName}
                             </span>
                           </div>
                           <div className="flex items-center gap-1">
@@ -403,12 +411,8 @@ export default function LibraryPage() {
           <ul className="text-sm text-muted-foreground space-y-1">
             <li>• Recitations are saved to the cloud</li>
             <li>• Export recitations as JSON for backup</li>
-            <li>
-              • Click &quot;Read&quot; to view your completed recitation
-            </li>
-            <li>
-              • Click &quot;Edit&quot; to continue editing a recitation
-            </li>
+            <li>• Click &quot;Read&quot; to view your completed recitation</li>
+            <li>• Click &quot;Edit&quot; to continue editing a recitation</li>
           </ul>
         </div>
       </div>
