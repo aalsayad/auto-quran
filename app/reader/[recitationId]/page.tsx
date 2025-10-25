@@ -95,6 +95,16 @@ export default function QuranReaderPage() {
   const [currentAyahNumbers, setCurrentAyahNumbers] = useState<number[]>([]);
   const [duration, setDuration] = useState(0);
 
+  // Cleanup blob URLs when component unmounts
+  useEffect(() => {
+    return () => {
+      if (audioRef.current?.src && audioRef.current.src.startsWith("blob:")) {
+        console.log("🧹 Cleaning up blob URL on unmount");
+        URL.revokeObjectURL(audioRef.current.src);
+      }
+    };
+  }, []);
+
   // Keep ref in sync with state for stable access in event handlers
   useEffect(() => {
     currentAyahNumbersRef.current = currentAyahNumbers;

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/auth-context";
+import { CacheBuster } from "@/components/cache-buster";
 
 export const metadata: Metadata = {
   title: "Auto Quran",
@@ -18,6 +19,7 @@ export default function RootLayout({
         <meta name="google" content="notranslate" />
       </head>
       <body>
+        <CacheBuster />
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
