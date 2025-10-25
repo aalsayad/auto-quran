@@ -28,7 +28,6 @@ import {
   FiChevronLeft,
   FiChevronRight,
   FiMoreVertical,
-  FiEye,
 } from "react-icons/fi";
 import {
   DropdownMenu,
@@ -47,6 +46,8 @@ import {
   DialogTrigger,
   DialogFooter,
 } from "@/components/ui/dialog";
+
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -54,7 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const amiri = Amiri({ subsets: ["arabic"], weight: ["400", "700"] });
 
@@ -71,16 +72,26 @@ function StandaloneMushafPageContent() {
   const [totalPages] = useState(604);
   const [verses, setVerses] = useState<Verse[]>([]);
   const [viewMode, setViewMode] = useState<"list" | "mushaf">("list");
-  const [showTranslation, setShowTranslation] = useState(false);
+  const [showTranslation, setShowTranslation] = useState(() => {
+    // Load translation preference from localStorage
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("showTranslation");
+      return saved === "true";
+    }
+    return false;
+  });
   const [bookmarkedAyahs, setBookmarkedAyahs] = useState<number[]>([]);
   const [bookmarksDetailed, setBookmarksDetailed] = useState<MushafBookmark[]>(
     []
   );
-  const [pageInput, setPageInput] = useState("");
-  const [showPageDialog, setShowPageDialog] = useState(false);
-  const [ayahInput, setAyahInput] = useState("");
-  const [showAyahDialog, setShowAyahDialog] = useState(false);
-  const [surahSearch, setSurahSearch] = useState("");
+  const [showNavigationDialog, setShowNavigationDialog] = useState(false);
+  const [navigationMode, setNavigationMode] = useState<
+    "surah" | "juz" | "page"
+  >("page");
+  const [selectedSurah, setSelectedSurah] = useState(1);
+  const [selectedJuz, setSelectedJuz] = useState(1);
+  const [selectedPage, setSelectedPage] = useState(1);
+  const [selectedAyah, setSelectedAyah] = useState("");
 
   // Swipe detection
   const touchStartX = useRef(0);
@@ -88,6 +99,13 @@ function StandaloneMushafPageContent() {
 
   // Refs for auto-scaling lines on mobile
   const lineRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Save translation preference to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("showTranslation", String(showTranslation));
+    }
+  }, [showTranslation]);
 
   // Load data progressively for instant navigation
   useEffect(() => {
@@ -188,11 +206,16 @@ function StandaloneMushafPageContent() {
   }, [verses]);
 
   // Auto-scale mushaf lines to fit mobile screen width
+  // Use ONE scale for ALL lines based on the longest line
   useLayoutEffect(() => {
     if (viewMode !== "mushaf") return;
 
     const isMobile = window.innerWidth < 768;
     if (!isMobile) return;
+
+    // Step 1: Find the longest line (max content width)
+    let maxContentWidth = 0;
+    let containerWidth = 0;
 
     lineRefs.current.forEach((lineEl) => {
       if (!lineEl) return;
@@ -200,19 +223,36 @@ function StandaloneMushafPageContent() {
       const container = lineEl.parentElement;
       if (!container) return;
 
-      // Reset any previous scaling
-      lineEl.style.transform = "";
+      // Get container width (same for all)
+      if (containerWidth === 0) {
+        containerWidth = container.clientWidth;
+      }
 
-      // Get dimensions
-      const containerWidth = container.clientWidth;
+      // Measure this line's content width
       const contentWidth = lineEl.scrollWidth;
+      if (contentWidth > maxContentWidth) {
+        maxContentWidth = contentWidth;
+      }
+    });
 
-      // If content is wider than container, scale it down
+    // Step 2: Calculate ONE scale based on the longest line
+    let globalScale = 1;
+    if (maxContentWidth > containerWidth) {
       // Leave 48px padding (24px on each side) from screen edges
-      if (contentWidth > containerWidth) {
-        const scale = (containerWidth - 48) / contentWidth;
-        lineEl.style.transform = `scale(${scale})`;
+      globalScale = (containerWidth - 48) / maxContentWidth;
+    }
+
+    // Step 3: Apply the SAME scale to ALL lines
+    lineRefs.current.forEach((lineEl) => {
+      if (!lineEl) return;
+
+      // Apply the global scale to all lines
+      if (globalScale < 1) {
+        lineEl.style.transform = `scale(${globalScale})`;
         lineEl.style.transformOrigin = "center";
+      } else {
+        // No scaling needed
+        lineEl.style.transform = "";
       }
     });
   }, [viewMode, verses, currentPage]);
@@ -243,13 +283,6 @@ function StandaloneMushafPageContent() {
   };
 
   // Navigation handlers
-  const handleSurahChange = async (surahNumber: number) => {
-    const firstPage = await getPageForSurah(surahNumber);
-    setCurrentPage(firstPage);
-    setCurrentSurah(surahNumber);
-    setSurahSearch(""); // Clear search after selection
-  };
-
   const handleNextPage = () => {
     if (currentPage < totalPages) {
       setCurrentPage((prev) => prev + 1);
@@ -262,73 +295,73 @@ function StandaloneMushafPageContent() {
     }
   };
 
-  const handlePageJump = () => {
-    const pageNum = parseInt(pageInput);
-    if (pageNum >= 1 && pageNum <= totalPages) {
-      setCurrentPage(pageNum);
-      setPageInput("");
-    }
-  };
-
   const handleBookmarkJump = (bookmark: MushafBookmark) => {
     setCurrentPage(bookmark.page_number);
   };
 
-  const handleAyahJump = () => {
-    const ayahNum = parseInt(ayahInput);
-    const surahInfo = SURAHS.find((s) => s.number === currentSurah);
-
-    if (!ayahInput || isNaN(ayahNum)) {
-      alert("Please enter a valid ayah number");
-      return;
-    }
-
-    if (!surahInfo || ayahNum < 1 || ayahNum > surahInfo.ayahs) {
-      alert(
-        `Please enter an ayah number between 1 and ${surahInfo?.ayahs || 286}`
-      );
-      return;
-    }
-
-    // Get the full surah data with pages info from allSurahs
-    const fullSurahInfo = allSurahs.find((s) => s.id === currentSurah);
-    if (!fullSurahInfo?.pages || fullSurahInfo.pages.length === 0) {
-      alert("Could not find surah page information");
-      return;
-    }
-
-    const firstPage = Math.min(...fullSurahInfo.pages);
-    const lastPage = Math.max(...fullSurahInfo.pages);
-
-    console.log(
-      `🔍 Searching for Surah ${currentSurah}, Ayah ${ayahNum} (pages ${firstPage}-${lastPage})...`
-    );
-
-    // Search through preloaded pages (instant!)
-    for (let page = firstPage; page <= lastPage; page++) {
-      const pageVerses = allPages[page.toString()] || [];
-
-      const hasTargetAyah = pageVerses.some((v) => {
-        if (!v.verse_key) return false;
-        const [surahNum, verseNum] = v.verse_key.split(":").map(Number);
-        return surahNum === currentSurah && verseNum === ayahNum;
-      });
-
-      if (hasTargetAyah) {
-        console.log(`✅ Found on page ${page}!`);
-        setCurrentPage(page);
-        setAyahInput("");
-        setShowAyahDialog(false);
-        return;
+  // Unified navigation handler
+  const handleNavigate = async () => {
+    if (navigationMode === "page") {
+      // Navigate by page
+      const pageNum = parseInt(selectedPage.toString());
+      if (pageNum >= 1 && pageNum <= totalPages) {
+        setCurrentPage(pageNum);
+        setShowNavigationDialog(false);
       }
-    }
+    } else if (navigationMode === "surah") {
+      // Navigate by surah
+      const surahNum = selectedSurah;
+      if (selectedAyah) {
+        // Navigate to specific ayah
+        const ayahNum = parseInt(selectedAyah);
+        const surahInfo = SURAHS.find((s) => s.number === surahNum);
 
-    // If we get here, ayah wasn't found
-    console.error(`❌ Could not find Surah ${currentSurah}, Ayah ${ayahNum}`);
-    console.error(`   Searched pages ${firstPage} to ${lastPage}`);
-    alert(
-      `Could not find Ayah ${ayahNum} in Surah ${surahInfo.transliteration}. This might be a data issue.`
-    );
+        if (!surahInfo || ayahNum < 1 || ayahNum > surahInfo.ayahs) {
+          alert(
+            `Please enter a valid ayah number (1-${surahInfo?.ayahs || 286})`
+          );
+          return;
+        }
+
+        // Find the page containing this ayah
+        const fullSurahInfo = allSurahs.find((s) => s.id === surahNum);
+        if (!fullSurahInfo?.pages || fullSurahInfo.pages.length === 0) {
+          alert("Could not find surah page information");
+          return;
+        }
+
+        const firstPage = Math.min(...fullSurahInfo.pages);
+        const lastPage = Math.max(...fullSurahInfo.pages);
+
+        // Search through preloaded pages
+        for (let page = firstPage; page <= lastPage; page++) {
+          const pageVerses = allPages[page.toString()] || [];
+          const hasTargetAyah = pageVerses.some((v) => {
+            if (!v.verse_key) return false;
+            const [vSurah, vAyah] = v.verse_key.split(":").map(Number);
+            return vSurah === surahNum && vAyah === ayahNum;
+          });
+
+          if (hasTargetAyah) {
+            setCurrentPage(page);
+            setShowNavigationDialog(false);
+            return;
+          }
+        }
+
+        alert(`Could not find Ayah ${ayahNum} in ${surahInfo.transliteration}`);
+      } else {
+        // Navigate to start of surah
+        const firstPage = await getPageForSurah(surahNum);
+        setCurrentPage(firstPage);
+        setShowNavigationDialog(false);
+      }
+    } else if (navigationMode === "juz") {
+      // Navigate by juz (each juz is ~20 pages)
+      const juzStartPage = (selectedJuz - 1) * 20 + 1;
+      setCurrentPage(juzStartPage);
+      setShowNavigationDialog(false);
+    }
   };
 
   // Toggle bookmark
@@ -397,30 +430,6 @@ function StandaloneMushafPageContent() {
   // Show ALL verses on the page, not just from current Surah
   const ayahsOnPage = verses.filter((v) => v.verse_key);
 
-  // Get ayah range for current page
-  const getAyahRange = () => {
-    if (verses.length === 0) return null;
-
-    const ayahNumbers: number[] = [];
-    verses.forEach((v) => {
-      if (v.verse_key) {
-        const [surahNum, ayahNum] = v.verse_key.split(":").map(Number);
-        if (surahNum === currentSurah) {
-          ayahNumbers.push(ayahNum);
-        }
-      }
-    });
-
-    if (ayahNumbers.length === 0) return null;
-
-    const min = Math.min(...ayahNumbers);
-    const max = Math.max(...ayahNumbers);
-
-    return min === max ? `${min}` : `${min}-${max}`;
-  };
-
-  const ayahRange = getAyahRange();
-
   // Show loading state while initial data is being fetched
   if (isLoading) {
     return (
@@ -442,340 +451,270 @@ function StandaloneMushafPageContent() {
         {/* Top Navbar */}
         <TopNavbar />
 
-        {/* Bottom Navigation Bar (Mushaf Controls) */}
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3">
-            {/* Left: Surah Selector & Ayah Range */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground hidden sm:inline">
-                Surah
-              </span>
-              <Select
-                value={currentSurah.toString()}
-                onValueChange={(v) => handleSurahChange(parseInt(v))}
-              >
-                <SelectTrigger className="w-48 cursor-pointer">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="max-h-80">
-                  {/* Search Input */}
-                  <div className="sticky top-0 z-10 bg-background p-2 border-b">
-                    <Input
-                      placeholder="Search surah..."
-                      value={surahSearch}
-                      onChange={(e) => setSurahSearch(e.target.value)}
-                      className="h-8 text-sm"
-                      onClick={(e) => e.stopPropagation()}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    />
-                  </div>
+        {/* Bottom Navigation Bar (Mushaf Controls) - UNIFIED FOR MOBILE & DESKTOP */}
+        <div className="container mx-auto px-4 py-3 border-t">
+          <div className="flex items-center justify-between gap-2">
+            {/* Spacer for alignment */}
+            <div className="w-10"></div>
 
-                  {/* Filtered Surah List */}
-                  <div className="max-h-60 overflow-y-auto">
-                    {SURAHS.filter(
-                      (surah) =>
-                        surah.transliteration
-                          .toLowerCase()
-                          .includes(surahSearch.toLowerCase()) ||
-                        surah.name.includes(surahSearch) ||
-                        surah.number.toString().includes(surahSearch)
-                    ).map((surah) => (
-                      <SelectItem
-                        key={surah.number}
-                        value={surah.number.toString()}
-                        className="cursor-pointer"
-                      >
-                        {surah.number}. {surah.transliteration}
-                      </SelectItem>
-                    ))}
-
-                    {/* No results message */}
-                    {SURAHS.filter(
-                      (surah) =>
-                        surah.transliteration
-                          .toLowerCase()
-                          .includes(surahSearch.toLowerCase()) ||
-                        surah.name.includes(surahSearch) ||
-                        surah.number.toString().includes(surahSearch)
-                    ).length === 0 && (
-                      <div className="py-6 text-center text-sm text-muted-foreground">
-                        No surahs found
-                      </div>
-                    )}
-                  </div>
-                </SelectContent>
-              </Select>
-
-              {/* Ayah Range with Dialog */}
-              {ayahRange && (
-                <>
-                  <span className="text-sm text-muted-foreground hidden sm:inline">
-                    Ayah
-                  </span>
-                  <Dialog
-                    open={showAyahDialog}
-                    onOpenChange={setShowAyahDialog}
-                  >
-                    <DialogTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="cursor-pointer px-3"
-                      >
-                        <b>{ayahRange}</b>
-                      </Button>
-                    </DialogTrigger>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Go to Ayah</DialogTitle>
-                        <DialogDescription>
-                          Enter an ayah number from Surah{" "}
-                          {surahInfo?.transliteration} (1-{surahInfo?.ayahs})
-                        </DialogDescription>
-                      </DialogHeader>
-                      <div className="py-4">
-                        <Input
-                          type="number"
-                          placeholder={`Enter a number between 1 and ${
-                            surahInfo?.ayahs || 286
-                          }`}
-                          min={1}
-                          max={surahInfo?.ayahs || 286}
-                          value={ayahInput}
-                          onChange={(e) => {
-                            const value = e.target.value;
-                            // Only allow numbers
-                            if (value === "" || /^\d+$/.test(value)) {
-                              setAyahInput(value);
-                            }
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              handleAyahJump();
-                            }
-                          }}
-                          autoFocus
-                          className="w-full"
-                        />
-                      </div>
-                      <DialogFooter>
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setShowAyahDialog(false);
-                            setAyahInput("");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                        <Button
-                          onClick={handleAyahJump}
-                          disabled={
-                            !ayahInput ||
-                            parseInt(ayahInput) < 1 ||
-                            parseInt(ayahInput) > (surahInfo?.ayahs || 286)
-                          }
-                        >
-                          Go to Ayah
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                </>
-              )}
-            </div>
-
-            {/* Center: Page Navigation */}
-            <div className="flex items-center gap-2 flex-wrap">
+            {/* Navigation Controls - Always Centered */}
+            <div className="flex items-center gap-1">
+              {/* Left: Next button */}
               <Button
                 onClick={handleNextPage}
                 disabled={currentPage === totalPages}
                 variant="outline"
                 size="sm"
-                className="cursor-pointer"
+                className="cursor-pointer px-2 sm:px-3"
               >
-                <FiChevronLeft className="mr-1 h-4 w-4" /> Next
+                <FiChevronLeft className="h-4 w-4" />
+                <span className="hidden sm:inline ml-1">Next</span>
               </Button>
 
-              {/* Page selector button with dialog */}
-              <Dialog open={showPageDialog} onOpenChange={setShowPageDialog}>
+              {/* Center: Navigation Dialog */}
+              <Dialog
+                open={showNavigationDialog}
+                onOpenChange={setShowNavigationDialog}
+              >
                 <DialogTrigger asChild>
                   <Button
                     variant="outline"
                     size="sm"
-                    className="cursor-pointer px-4"
+                    className="cursor-pointer px-3 sm:px-6"
                   >
-                    Page <b className="ml-1">{currentPage}</b> of {totalPages}
+                    <span className="text-sm whitespace-nowrap">
+                      {surahInfo?.transliteration || ""} • Pg {currentPage}
+                    </span>
                   </Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent className="sm:max-w-md">
                   <DialogHeader>
-                    <DialogTitle>Go to Page</DialogTitle>
+                    <DialogTitle>Navigate Quran</DialogTitle>
                     <DialogDescription>
-                      Enter a page number between 1 and {totalPages}
+                      Choose how you want to navigate
                     </DialogDescription>
                   </DialogHeader>
-                  <div className="py-4">
-                    <Input
-                      type="number"
-                      placeholder="Page number"
-                      min={1}
-                      max={totalPages}
-                      value={pageInput}
-                      onChange={(e) => setPageInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          handlePageJump();
-                          setShowPageDialog(false);
-                        }
-                      }}
-                      autoFocus
-                      className="w-full"
-                    />
-                  </div>
+
+                  <Tabs
+                    value={navigationMode}
+                    onValueChange={(v) =>
+                      setNavigationMode(v as "surah" | "juz" | "page")
+                    }
+                  >
+                    <TabsList className="grid w-full grid-cols-3">
+                      <TabsTrigger value="surah">Surah</TabsTrigger>
+                      <TabsTrigger value="juz">Juz</TabsTrigger>
+                      <TabsTrigger value="page">Page</TabsTrigger>
+                    </TabsList>
+
+                    {/* Surah Tab */}
+                    <TabsContent value="surah" className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                          Select Surah
+                        </label>
+                        <Select
+                          value={selectedSurah.toString()}
+                          onValueChange={(v) => setSelectedSurah(parseInt(v))}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-60">
+                            {SURAHS.map((surah) => (
+                              <SelectItem
+                                key={surah.number}
+                                value={surah.number.toString()}
+                              >
+                                {surah.number}. {surah.transliteration}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                          Ayah (Optional)
+                        </label>
+                        <Input
+                          type="number"
+                          placeholder={`1-${
+                            SURAHS.find((s) => s.number === selectedSurah)
+                              ?.ayahs || 286
+                          }`}
+                          value={selectedAyah}
+                          onChange={(e) => setSelectedAyah(e.target.value)}
+                          min={1}
+                          max={
+                            SURAHS.find((s) => s.number === selectedSurah)
+                              ?.ayahs || 286
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                    </TabsContent>
+
+                    {/* Juz Tab */}
+                    <TabsContent value="juz" className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                          Select Juz
+                        </label>
+                        <Select
+                          value={selectedJuz.toString()}
+                          onValueChange={(v) => setSelectedJuz(parseInt(v))}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Array.from({ length: 30 }, (_, i) => i + 1).map(
+                              (juz) => (
+                                <SelectItem key={juz} value={juz.toString()}>
+                                  Juz {juz}
+                                </SelectItem>
+                              )
+                            )}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </TabsContent>
+
+                    {/* Page Tab */}
+                    <TabsContent value="page" className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">
+                          Page Number
+                        </label>
+                        <Input
+                          type="number"
+                          placeholder="1-604"
+                          value={selectedPage}
+                          onChange={(e) =>
+                            setSelectedPage(parseInt(e.target.value))
+                          }
+                          min={1}
+                          max={604}
+                          className="w-full"
+                        />
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+
                   <DialogFooter>
                     <Button
                       variant="outline"
-                      onClick={() => setShowPageDialog(false)}
+                      onClick={() => setShowNavigationDialog(false)}
                     >
                       Cancel
                     </Button>
-                    <Button
-                      onClick={() => {
-                        handlePageJump();
-                        setShowPageDialog(false);
-                      }}
-                    >
-                      Go to Page
-                    </Button>
+                    <Button onClick={handleNavigate}>Navigate</Button>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
 
+              {/* Right: Previous button */}
               <Button
                 onClick={handlePrevPage}
                 disabled={currentPage === 1}
                 variant="outline"
                 size="sm"
-                className="cursor-pointer"
+                className="cursor-pointer px-2 sm:px-3"
               >
-                Previous <FiChevronRight className="ml-1 h-4 w-4" />
+                <span className="hidden sm:inline mr-1">Previous</span>
+                <FiChevronRight className="h-4 w-4" />
               </Button>
             </div>
 
-            {/* Right: View Toggle and Options */}
-            <div className="flex items-center gap-2">
-              {/* Compact View Toggle */}
-              <div className="flex items-center gap-2 border border-border rounded-md px-2 py-1">
-                <div className="flex items-center gap-1 text-sm text-muted-foreground opacity-60">
-                  <FiEye className="size-3" />
-                  <span className="text-sm">View</span>
-                </div>
-                <div className="flex items-center ml-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setViewMode("list")}
-                    className={`cursor-pointer px-3 py-1 h-auto text-sm transition-colors ${
-                      viewMode === "list"
-                        ? "bg-primary/10 text-primary font-medium hover:bg-primary/20"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                    }`}
-                  >
-                    List
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setViewMode("mushaf")}
-                    className={`cursor-pointer px-3 py-1 h-auto text-sm transition-colors ${
-                      viewMode === "mushaf"
-                        ? "bg-primary/10 text-primary font-medium hover:bg-primary/20"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                    }`}
-                  >
-                    Mushaf
-                  </Button>
-                </div>
-              </div>
-
-              {/* Options Dropdown */}
-              <DropdownMenu modal={false}>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="cursor-pointer h-auto p-2 aspect-square"
-                  >
-                    <FiMoreVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="end"
-                  className="w-64"
-                  sideOffset={8}
+            {/* Far Right: Options Menu */}
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="cursor-pointer h-auto p-2 aspect-square"
                 >
-                  {/* Translation Toggle (only in list view) */}
-                  {viewMode === "list" && (
-                    <>
-                      <DropdownMenuItem
-                        onClick={() => setShowTranslation(!showTranslation)}
-                        className="cursor-pointer"
-                      >
-                        <FiBook className="mr-2 h-4 w-4" />
-                        {showTranslation ? "Hide" : "Show"} Translation
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                    </>
-                  )}
+                  <FiMoreVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64" sideOffset={8}>
+                {/* View Mode Toggle */}
+                <DropdownMenuLabel>View Mode</DropdownMenuLabel>
+                <DropdownMenuItem
+                  onClick={() => setViewMode("list")}
+                  className="cursor-pointer"
+                >
+                  {viewMode === "list" && "✓ "}
+                  List View
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setViewMode("mushaf")}
+                  className="cursor-pointer"
+                >
+                  {viewMode === "mushaf" && "✓ "}
+                  Mushaf View
+                </DropdownMenuItem>
 
-                  {/* Bookmarks Section */}
-                  {user && bookmarksDetailed.length > 0 && (
-                    <>
-                      <DropdownMenuLabel className="text-purple-600">
-                        Bookmarks ({bookmarksDetailed.length})
-                      </DropdownMenuLabel>
-                      <div className="max-h-48 overflow-y-auto">
-                        {bookmarksDetailed.map((bookmark) => (
-                          <DropdownMenuItem
-                            key={bookmark.id}
-                            className="cursor-pointer"
-                            onClick={() => handleBookmarkJump(bookmark)}
-                          >
-                            <FiBookmark className="mr-2 h-4 w-4 text-purple-500 fill-current" />
-                            <div className="flex flex-col">
-                              <span>
-                                Surah {bookmark.surah_number}, Ayah{" "}
-                                {bookmark.ayah_number}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {new Date(
-                                  bookmark.created_at
-                                ).toLocaleDateString("en-US", {
+                <DropdownMenuSeparator />
+
+                {/* Translation Toggle */}
+                {viewMode === "list" && (
+                  <>
+                    <DropdownMenuItem
+                      onClick={() => setShowTranslation(!showTranslation)}
+                      className="cursor-pointer"
+                    >
+                      <FiBook className="mr-2 h-4 w-4" />
+                      {showTranslation ? "Hide" : "Show"} Translation
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+
+                {/* Bookmarks Section */}
+                {user && bookmarksDetailed.length > 0 && (
+                  <>
+                    <DropdownMenuLabel className="text-purple-600">
+                      Bookmarks ({bookmarksDetailed.length})
+                    </DropdownMenuLabel>
+                    <div className="max-h-48 overflow-y-auto">
+                      {bookmarksDetailed.map((bookmark) => (
+                        <DropdownMenuItem
+                          key={bookmark.id}
+                          className="cursor-pointer"
+                          onClick={() => handleBookmarkJump(bookmark)}
+                        >
+                          <FiBookmark className="mr-2 h-4 w-4 text-purple-500 fill-current" />
+                          <div className="flex flex-col">
+                            <span>
+                              Surah {bookmark.surah_number}, Ayah{" "}
+                              {bookmark.ayah_number}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(bookmark.created_at).toLocaleDateString(
+                                "en-US",
+                                {
                                   month: "short",
                                   day: "numeric",
                                   year: "numeric",
-                                })}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                        ))}
-                      </div>
-                    </>
-                  )}
+                                }
+                              )}
+                            </span>
+                          </div>
+                        </DropdownMenuItem>
+                      ))}
+                    </div>
+                  </>
+                )}
 
-                  {/* No bookmarks message */}
-                  {user && bookmarksDetailed.length === 0 && (
-                    <>
-                      <DropdownMenuLabel className="text-muted-foreground">
-                        No bookmarks yet
-                      </DropdownMenuLabel>
-                    </>
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+                {user && bookmarksDetailed.length === 0 && (
+                  <DropdownMenuLabel className="text-muted-foreground">
+                    No bookmarks yet
+                  </DropdownMenuLabel>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </div>

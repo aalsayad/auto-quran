@@ -152,7 +152,6 @@
     direction: rtl;
     unicode-bidi: embed;
     line-height: 1.2;
-    transition: transform 0.2s ease;
   }
 
   /* On larger screens, allow horizontal scroll if needed */
